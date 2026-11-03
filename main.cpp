@@ -4,10 +4,17 @@
 
 #include <GLFW/glfw3.h>
 #include <iostream>
-
+#include <fstream>
 int main()
 {
     int currentPoints = 0;
+    std::ifstream inputFile("behavior_data.txt");
+
+    if (inputFile.is_open())
+    {
+        inputFile >> currentPoints;
+        inputFile.close();
+    }
     // Initialize GLFW
     if (!glfwInit())
     {
@@ -179,6 +186,13 @@ int main()
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+    }
+    //Save to file
+    std::ofstream outputFile("behavior_data.txt");
+    if (outputFile.is_open())
+    {
+        outputFile << currentPoints;
+        outputFile.close();
     }
 
     // Shut down ImGui
