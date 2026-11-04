@@ -27,6 +27,7 @@ set(IMGUI_SOURCES
 # Create the application
 add_executable(BehaviorTracker
     main.cpp
+    BehaviorLog.cpp
     ${IMGUI_SOURCES}
 )
 

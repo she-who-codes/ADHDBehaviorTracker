@@ -1,6 +1,8 @@
-4
-GOOD|5|Completed Morning Routine
-GOOD|2|Followed Directions
-GOOD|5|Completed Schoolwork
-WRONG|3|Negative Behavior
-WRONG|5|Incomplete Schoolwork
+# ADHD Behavior Tracker data
+# POINTS = current point balance
+# Behavior lines: date|time|points|points after|behavior
+POINTS 8
+2026-11-04|14:20:00|+5|9|Completed Morning Routine
+2026-11-04|14:20:01|+5|14|Completed Morning Routine
+2026-11-04|14:20:02|-3|11|Negative Behavior
+2026-11-04|14:20:02|-3|8|Negative Behavior

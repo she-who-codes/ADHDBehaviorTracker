@@ -52,6 +52,14 @@ build CMakeFiles/BehaviorTracker.dir/main.cpp.obj: CXX_COMPILER__BehaviorTracker
   OBJECT_FILE_DIR = CMakeFiles\BehaviorTracker.dir
   TARGET_SUPPORT_DIR = CMakeFiles\BehaviorTracker.dir
 
+build CMakeFiles/BehaviorTracker.dir/BehaviorLog.cpp.obj: CXX_COMPILER__BehaviorTracker_unscanned_ C$:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/BehaviorLog.cpp || cmake_object_order_depends_target_BehaviorTracker
+  DEP_FILE = CMakeFiles\BehaviorTracker.dir\BehaviorLog.cpp.obj.d
+  FLAGS = -std=gnu++17
+  INCLUDES = -IC:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/external/imgui -IC:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/external/imgui/backends -IC:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/external/glfw/include
+  OBJECT_DIR = CMakeFiles\BehaviorTracker.dir
+  OBJECT_FILE_DIR = CMakeFiles\BehaviorTracker.dir
+  TARGET_SUPPORT_DIR = CMakeFiles\BehaviorTracker.dir
+
 build CMakeFiles/BehaviorTracker.dir/external/imgui/imgui.cpp.obj: CXX_COMPILER__BehaviorTracker_unscanned_ C$:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/external/imgui/imgui.cpp || cmake_object_order_depends_target_BehaviorTracker
   DEP_FILE = CMakeFiles\BehaviorTracker.dir\external\imgui\imgui.cpp.obj.d
   FLAGS = -std=gnu++17
@@ -108,7 +116,7 @@ build CMakeFiles/BehaviorTracker.dir/external/imgui/backends/imgui_impl_opengl3.
 #############################################
 # Link the executable BehaviorTracker.exe
 
-build BehaviorTracker.exe: CXX_EXECUTABLE_LINKER__BehaviorTracker_ CMakeFiles/BehaviorTracker.dir/main.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui_draw.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui_tables.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui_widgets.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/backends/imgui_impl_glfw.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/backends/imgui_impl_opengl3.cpp.obj | external/glfw/src/libglfw3.a || external/glfw/src/libglfw3.a
+build BehaviorTracker.exe: CXX_EXECUTABLE_LINKER__BehaviorTracker_ CMakeFiles/BehaviorTracker.dir/main.cpp.obj CMakeFiles/BehaviorTracker.dir/BehaviorLog.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui_draw.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui_tables.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/imgui_widgets.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/backends/imgui_impl_glfw.cpp.obj CMakeFiles/BehaviorTracker.dir/external/imgui/backends/imgui_impl_opengl3.cpp.obj | external/glfw/src/libglfw3.a || external/glfw/src/libglfw3.a
   LINK_LIBRARIES = external/glfw/src/libglfw3.a  -lopengl32  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
   OBJECT_DIR = CMakeFiles\BehaviorTracker.dir
   POST_BUILD = cd .
