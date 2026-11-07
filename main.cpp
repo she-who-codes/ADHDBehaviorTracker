@@ -176,6 +176,8 @@ void saveBehaviorData(int currentPoints, const std::vector<BehaviorChoice> &choi
     outputFile.close();
 }
 
+
+
 static void DrawMainScreen(BehaviorLog &behaviorLog, UiState &ui)
 {
     ImGui::Text("Welcome to the Behavior Tracker!");
@@ -754,7 +756,8 @@ int main()
     {
         behaviorLog.save();
     }
-
+   int currentPoints = 0;
+    std::vector<BehaviorChoice> choices;
     UiState ui;
 
     // Initialize GLFW
@@ -868,6 +871,8 @@ int main()
             break;
         }
 
+        drawAddChoiceButton(true, choices, currentPoints);
+        drawAddChoiceButton(false, choices, currentPoints);
         ImGui::End();
 
         // Render the UI
