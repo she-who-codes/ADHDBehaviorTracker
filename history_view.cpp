@@ -1,6 +1,7 @@
 #include "history_view.h"
 
 #include "history_export.h"
+#include "trends_view.h"
 #include "imgui.h"
 
 #include <cstdio>
@@ -34,6 +35,7 @@ static const ImVec4 kExportButtonHover(0.18f, 0.70f, 0.45f, 1.00f);
 static const ImVec4 kExportButtonActive(0.10f, 0.45f, 0.28f, 1.00f);
 static const ImVec2 kExportButtonSize(260.0f, 55.0f);
 static const char *kExportPopupId = "PDF Export###ExportResultPopup";
+static const ImVec2 kTrendsButtonSize(200.0f, 55.0f);
 
 // Outcome of the last "Export PDF" click, shown in the confirmation popup.
 struct ExportStatus
@@ -302,6 +304,12 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     ImGui::Text("History - Last 30 Days");
     ImGui::SameLine();
     ImGui::TextDisabled("   Current Points: %d", log.currentPoints());
+
+    // "Trends" sits just left of "Export PDF"
+    ImGui::SameLine(rowStartX + rowWidth - kExportButtonSize.x -
+                    ImGui::GetStyle().ItemSpacing.x - kTrendsButtonSize.x);
+    if (ImGui::Button("Trends", kTrendsButtonSize))
+        OpenTrendsScreen(screen, Screen::History);
 
     ImGui::SameLine(rowStartX + rowWidth - kExportButtonSize.x);
     ImGui::PushStyleColor(ImGuiCol_Button, kExportButton);

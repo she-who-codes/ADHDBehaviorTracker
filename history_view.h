@@ -10,6 +10,7 @@ enum class Screen
     Main,
     History,
     DayDetail,
+    Trends,
 };
 
 // Week rows (0-based, Sunday-first) of a month's calendar grid that contain

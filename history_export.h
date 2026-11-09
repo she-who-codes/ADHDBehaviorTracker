@@ -29,6 +29,10 @@ std::filesystem::path DownloadsFolder();
 // so an earlier export is never overwritten.
 std::filesystem::path UniquePath(const std::filesystem::path &dir, const std::string &fileName);
 
+// Writes already-built PDF bytes to the Downloads folder as fileName (or
+// "fileName (2).pdf" etc. if that name is taken). Used by every PDF export.
+ExportResult ExportPdfToDownloads(const std::string &fileName, const std::string &pdfBytes);
+
 // Writes the report to the Downloads folder.
 ExportResult ExportHistoryPdf(const BehaviorLog &log, std::time_t now = std::time(nullptr));
 

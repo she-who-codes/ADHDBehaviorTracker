@@ -5,3 +5,7 @@ WRONG|3|Negative Behavior
 WRONG|5|Incomplete Schoolwork
 GOOD|5|Cleaned up toys
 WRONG|7|Lying
+GOOD|1|Helped with projec
+GOOD|3|Sharing toys
+WRONG|4|Being Deceitful
+WRONG|5|Being Destructive

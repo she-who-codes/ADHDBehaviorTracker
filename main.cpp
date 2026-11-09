@@ -13,6 +13,7 @@
 
 #include "behavior_log.h"
 #include "history_view.h"
+#include "trends_view.h"
 
 // Custom behavior choices are stored separately from BehaviorLog's history file.
 // This prevents the choice definitions from overwriting points and history.
@@ -109,6 +110,17 @@ static void saveChoices(const std::vector<BehaviorChoice> &choices)
         output << (choice.isGood ? "GOOD" : "WRONG") << "|"
                << strength << "|" << choice.name << "\n";
     }
+}
+
+// Name and good/wrong type of every behavior button, for the Trends screen
+// (so choices that were never logged can still be listed with 0).
+static std::vector<ChoiceInfo> toChoiceInfo(const std::vector<BehaviorChoice> &choices)
+{
+    std::vector<ChoiceInfo> info;
+    info.reserve(choices.size());
+    for (const BehaviorChoice &choice : choices)
+        info.push_back({choice.name, choice.isGood});
+    return info;
 }
 
 static void drawChoiceButtons(BehaviorLog &log,
@@ -388,6 +400,10 @@ int main()
         {
             DrawDayDetailScreen(log, screen, selectedDate);
         }
+        else if (screen == Screen::Trends)
+        {
+            DrawTrendsScreen(log, toChoiceInfo(choices), screen);
+        }
         else
         {
             ImGui::Text("Welcome to the Behavior Tracker!");
@@ -398,6 +414,12 @@ int main()
             if (ImGui::Button("History", ImVec2(200, 55)))
             {
                 screen = Screen::History;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Trends", ImVec2(200, 55)))
+            {
+                OpenTrendsScreen(screen, Screen::Main);
             }
 
             ImGui::Separator();
