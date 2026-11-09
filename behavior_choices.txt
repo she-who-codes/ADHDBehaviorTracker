@@ -1,0 +1,7 @@
+GOOD|5|Completed Morning Routine
+GOOD|2|Followed Directions
+GOOD|5|Completed Schoolwork
+WRONG|3|Negative Behavior
+WRONG|5|Incomplete Schoolwork
+GOOD|5|Cleaned up toys
+WRONG|7|Lying

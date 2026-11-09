@@ -27,7 +27,10 @@ set(IMGUI_SOURCES
 # Create the application
 add_executable(BehaviorTracker
     main.cpp
-    BehaviorLog.cpp
+    behavior_log.cpp
+    history_view.cpp
+    history_export.cpp
+    simple_pdf.cpp
     ${IMGUI_SOURCES}
 )
 
@@ -41,4 +44,6 @@ target_include_directories(BehaviorTracker PRIVATE
 target_link_libraries(BehaviorTracker PRIVATE
     glfw
     opengl32
+    shell32   # SHGetKnownFolderPath (Downloads folder), ShellExecuteW (open PDF)
+    ole32     # CoTaskMemFree
 )

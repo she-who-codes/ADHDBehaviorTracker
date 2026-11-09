@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/build_new/cmake_install.cmake",
+		"C:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/build_new/external/glfw/cmake_install.cmake",
+		"C:/Users/mandy/Documents/C++BehaviorTracker/ADHDBehaviorTracker/build_new/external/glfw/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
