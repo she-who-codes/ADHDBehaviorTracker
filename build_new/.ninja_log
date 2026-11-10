@@ -58,3 +58,7 @@
 90	1910	8159753786103438	CMakeFiles/BehaviorTracker.dir/history_view.cpp.obj	d64a148d687e670
 102	2235	8159753786160899	CMakeFiles/BehaviorTracker.dir/trends_view.cpp.obj	3272136f13c2a122
 2236	2879	8159753807559168	BehaviorTracker.exe	5b193ce11c12e967
+162	7812	8160336234301319	CMakeFiles/BehaviorTracker.dir/main.cpp.obj	ab4101caf5eae2d1
+269	7840	8160336235510919	CMakeFiles/BehaviorTracker.dir/history_view.cpp.obj	d64a148d687e670
+289	7923	8160336235710457	CMakeFiles/BehaviorTracker.dir/trends_view.cpp.obj	3272136f13c2a122
+7923	9708	8160336312044347	BehaviorTracker.exe	5b193ce11c12e967

@@ -15,6 +15,7 @@
 #include "behavior_log.h"
 #include "history_view.h"
 #include "trends_view.h"
+#include "ui_layout.h"
 
 // Custom behavior choices are stored separately from BehaviorLog's history file.
 // This prevents the choice definitions from overwriting points and history.
@@ -22,6 +23,20 @@ static const char *CHOICES_FILE = "behavior_choices.txt";
 static const int MIN_POINTS = 1;
 static const int MAX_POINTS = 10;
 static const ImVec2 kBehaviorButtonSize(560, 65);
+static const float kAddChoiceButtonHeight = 48.0f;
+static const float kChoiceNameWidth = 560.0f;   // name box in the "New ... Choice" popup
+static const float kPopupButtonWidth = 270.0f;  // "Add" / "Cancel"
+
+// Width for the big full-row buttons on the main screen: their normal width
+// when the window is wide enough, narrower when it isn't, but never so narrow
+// that the label is cut off (the window scrolls sideways instead).
+static float mainButtonWidth(const char *label)
+{
+    float width = ImGui::GetContentRegionAvail().x;
+    if (width > kBehaviorButtonSize.x) width = kBehaviorButtonSize.x;
+    const float labelWidth = UiLayout::ButtonLabelWidth(label);
+    return (width < labelWidth) ? labelWidth : width;
+}
 
 static int clampPoints(int points, bool isGood)
 {
@@ -117,7 +132,8 @@ static void drawChoiceButtons(BehaviorLog &log,
 
         ImGui::PushID(static_cast<int>(i));
         const std::string label = makeChoiceLabel(choice);
-        if (ImGui::Button(label.c_str(), kBehaviorButtonSize))
+        const ImVec2 size(mainButtonWidth(label.c_str()), kBehaviorButtonSize.y);
+        if (ImGui::Button(label.c_str(), size))
             log.record(choice.name, choice.points);
         ImGui::PopID();
     }
@@ -180,7 +196,7 @@ static void drawAddChoiceButton(bool isGood,
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.42f, 0.65f, 0.78f, 1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
 
-    if (ImGui::Button(buttonLabel, ImVec2(560, 48)))
+    if (ImGui::Button(buttonLabel, ImVec2(mainButtonWidth(buttonLabel), kAddChoiceButtonHeight)))
     {
         name[0] = '\0';
         points = defaultPoints(isGood);
@@ -190,24 +206,41 @@ static void drawAddChoiceButton(bool isGood,
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(4);
 
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    // Keep the popup inside the app window, even a small one: centre it again
+    // if the window is resized while it is open, narrow its contents to fit,
+    // and let it scroll if the window is too short to show all of it.
+    static ImVec2 lastDisplaySize[2] = {};
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    const ImGuiStyle &style = ImGui::GetStyle();
+    float contentWidth = viewport->WorkSize.x - style.WindowPadding.x * 2.0f -
+                         style.ScrollbarSize - 2.0f * style.ItemSpacing.x;
+    if (contentWidth > kChoiceNameWidth) contentWidth = kChoiceNameWidth;
+    if (contentWidth < 200.0f) contentWidth = 200.0f;
+    float popupButtonWidth = (contentWidth - style.ItemSpacing.x) * 0.5f;
+    if (popupButtonWidth > kPopupButtonWidth) popupButtonWidth = kPopupButtonWidth;
+
+    ImGui::SetNextWindowPos(viewport->GetCenter(),
+                            UiLayout::CenterCondition(lastDisplaySize[isGood ? 0 : 1]),
+                            ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), viewport->WorkSize);
 
     if (ImGui::BeginPopupModal(popupTitle, nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::Text("Choice name:");
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-        ImGui::SetNextItemWidth(560);
+        ImGui::SetNextItemWidth(contentWidth);
         ImGui::InputTextWithHint("##name",
     isGood ? "e.g. Cleaned Room" : "e.g. Lying",
     name, sizeof(nameInput[0]));
 
         ImGui::Text(isGood ? "Points to add:" : "Points to subtract:");
         drawPointsStepper(points, isGood);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + contentWidth);
         ImGui::TextDisabled(
             isGood ? "+ rewards more, - rewards less (+1 to +10)"
                    : "+ penalises more, - penalises less (-1 to -10)");
+        ImGui::PopTextWrapPos();
 
         std::string trimmedName = name;
         const size_t first = trimmedName.find_first_not_of(" \\t");
@@ -218,7 +251,7 @@ static void drawAddChoiceButton(bool isGood,
 
         ImGui::Spacing();
         ImGui::BeginDisabled(!canAdd);
-        const bool addClicked = ImGui::Button("Add", ImVec2(270, 0));
+        const bool addClicked = ImGui::Button("Add", ImVec2(popupButtonWidth, 0));
         ImGui::EndDisabled();
 
         if (canAdd && addClicked)
@@ -229,7 +262,7 @@ static void drawAddChoiceButton(bool isGood,
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(270, 0)) ||
+        if (ImGui::Button("Cancel", ImVec2(popupButtonWidth, 0)) ||
             (!ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)))
             ImGui::CloseCurrentPopup();
 
@@ -250,6 +283,7 @@ int main()
     saveChoices(choices);
 
     Screen screen = Screen::Main;
+    Screen shownScreen = screen; // screen drawn last frame
     std::string selectedDate; // day shown on the DayDetail screen
 
     // When the clock passes midnight, re-save so the oldest day is pruned
@@ -367,13 +401,22 @@ int main()
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
 
+        // Each screen opens at the top, even if the previous one was
+        // scrolled (screens can scroll when the window is small).
+        if (screen != shownScreen)
+        {
+            ImGui::SetNextWindowScroll(ImVec2(0.0f, 0.0f));
+            shownScreen = screen;
+        }
+
         ImGui::Begin(
             "Behavior Tracker",
             nullptr,
             ImGuiWindowFlags_NoTitleBar |
                 ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove |
-                ImGuiWindowFlags_NoCollapse);
+                ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_HorizontalScrollbar); // when the window is too narrow
 
         if (screen == Screen::History)
         {
@@ -393,12 +436,13 @@ int main()
             ImGui::Text("Current Points: %d", log.currentPoints());
 
             // History button sits on the same row as the points display
-            ImGui::SameLine(0.0f, 60.0f);
+            // (the buttons move to the next row if the window is too narrow)
+            UiLayout::SameLineOrWrap(200.0f, 60.0f);
             if (ImGui::Button("History", ImVec2(200, 55)))
             {
                 screen = Screen::History;
             }
-            ImGui::SameLine();
+            UiLayout::SameLineOrWrap(200.0f);
             if (ImGui::Button("Trends", ImVec2(200, 55)))
             {
                 OpenTrendsScreen(screen);
@@ -415,9 +459,12 @@ int main()
                 ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.70f, 0.45f, 1.0f));
 
             drawChoiceButtons(log, choices, true);
-            drawAddChoiceButton(true, choices);
 
             ImGui::PopStyleColor(2);
+
+            // Drawn after popping the green, so the "New Good Choice" popup
+            // uses the standard (blue) button colour.
+            drawAddChoiceButton(true, choices);
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -429,9 +476,12 @@ int main()
                 ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.30f, 0.30f, 1.0f));
 
             drawChoiceButtons(log, choices, false);
-            drawAddChoiceButton(false, choices);
 
             ImGui::PopStyleColor(2);
+
+            // Drawn after popping the red, so the "New Wrong Choice" popup
+            // uses the standard (blue) button colour.
+            drawAddChoiceButton(false, choices);
             ImGui::Separator();
         }
 
