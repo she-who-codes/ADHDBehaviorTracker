@@ -1,6 +1,7 @@
 #include "history_export.h"
 
-#include "pdf_report_writer.h"
+#include "report_writer.h"
+#include "simple_pdf.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -24,13 +25,15 @@
 
 namespace
 {
-using namespace pdf_report;
+using namespace report;
 
 // Day table columns
 constexpr float kColTime = kMargin + 8;
 constexpr float kColBehavior = kMargin + 92;
 constexpr float kColPointsRight = kMargin + 390;
 constexpr float kColTotalRight = kMargin + kContentW - 8;
+
+constexpr Color kDayBandFill{0.84f, 0.87f, 0.96f};
 
 std::string signedPoints(int delta)
 {
@@ -72,7 +75,7 @@ std::string BuildHistoryPdf(const BehaviorLog &log, std::time_t now)
 {
     const std::vector<HistoryDay> days = log.historyWindow(now); // oldest first
 
-    ReportWriter w;
+    ReportWriter w("Behavior Tracker - Behavior History Report");
     w.doc.setTitle("Behavior History Report");
 
     // ---- Report header ------------------------------------------------------
@@ -181,7 +184,7 @@ std::string BuildHistoryPdf(const BehaviorLog &log, std::time_t now)
         w.y += 10;
     }
 
-    w.footers("Behavior History Report");
+    w.footers();
     return w.doc.serialize();
 }
 
@@ -230,7 +233,7 @@ std::filesystem::path UniquePath(const std::filesystem::path &dir, const std::st
     }
 }
 
-ExportResult ExportPdfToDownloads(const std::string &fileName, const std::string &pdfBytes)
+ExportResult SavePdfToDownloads(const std::string &fileName, const std::string &pdfBytes)
 {
     ExportResult result;
 
@@ -265,7 +268,7 @@ ExportResult ExportPdfToDownloads(const std::string &fileName, const std::string
 
 ExportResult ExportHistoryPdf(const BehaviorLog &log, std::time_t now)
 {
-    return ExportPdfToDownloads(HistoryPdfFileName(log, now), BuildHistoryPdf(log, now));
+    return SavePdfToDownloads(HistoryPdfFileName(log, now), BuildHistoryPdf(log, now));
 }
 
 bool OpenWithDefaultApp(const std::filesystem::path &path)

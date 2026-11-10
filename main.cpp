@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "behavior_choice.h"
 #include "behavior_log.h"
 #include "history_view.h"
 #include "trends_view.h"
@@ -21,13 +22,6 @@ static const char *CHOICES_FILE = "behavior_choices.txt";
 static const int MIN_POINTS = 1;
 static const int MAX_POINTS = 10;
 static const ImVec2 kBehaviorButtonSize(560, 65);
-
-struct BehaviorChoice
-{
-    std::string name;
-    int points;       // Positive for good choices, negative for wrong choices.
-    bool isGood;
-};
 
 static int clampPoints(int points, bool isGood)
 {
@@ -110,17 +104,6 @@ static void saveChoices(const std::vector<BehaviorChoice> &choices)
         output << (choice.isGood ? "GOOD" : "WRONG") << "|"
                << strength << "|" << choice.name << "\n";
     }
-}
-
-// Name and good/wrong type of every behavior button, for the Trends screen
-// (so choices that were never logged can still be listed with 0).
-static std::vector<ChoiceInfo> toChoiceInfo(const std::vector<BehaviorChoice> &choices)
-{
-    std::vector<ChoiceInfo> info;
-    info.reserve(choices.size());
-    for (const BehaviorChoice &choice : choices)
-        info.push_back({choice.name, choice.isGood});
-    return info;
 }
 
 static void drawChoiceButtons(BehaviorLog &log,
@@ -402,7 +385,7 @@ int main()
         }
         else if (screen == Screen::Trends)
         {
-            DrawTrendsScreen(log, toChoiceInfo(choices), screen);
+            DrawTrendsScreen(log, choices, screen);
         }
         else
         {
@@ -415,11 +398,10 @@ int main()
             {
                 screen = Screen::History;
             }
-
             ImGui::SameLine();
             if (ImGui::Button("Trends", ImVec2(200, 55)))
             {
-                OpenTrendsScreen(screen, Screen::Main);
+                OpenTrendsScreen(screen);
             }
 
             ImGui::Separator();

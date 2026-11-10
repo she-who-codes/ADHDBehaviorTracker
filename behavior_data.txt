@@ -1,4 +1,4 @@
-20
+16
 2026-10-10 13:54:39|5|16|Completed Schoolwork
 2026-10-10 13:54:42|5|12|Completed Morning Routine
 2026-10-11 13:54:40|-3|13|Negative Behavior
@@ -68,3 +68,11 @@
 2026-11-09 13:46:10|5|30|Cleaned up toys
 2026-11-09 13:46:11|-3|27|Negative Behavior
 2026-11-09 13:46:12|-7|20|Lying
+2026-11-09 18:38:38|-3|17|Negative Behavior
+2026-11-09 18:38:39|-5|12|Incomplete Schoolwork
+2026-11-09 18:38:39|-5|7|Incomplete Schoolwork
+2026-11-09 18:38:40|3|10|Sharing toys
+2026-11-09 18:38:40|3|13|Sharing toys
+2026-11-09 18:38:41|5|18|Completed Morning Routine
+2026-11-09 18:38:43|1|19|Helped with projec
+2026-11-09 18:38:44|-3|16|Negative Behavior

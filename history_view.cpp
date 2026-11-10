@@ -1,8 +1,8 @@
 #include "history_view.h"
 
 #include "history_export.h"
-#include "trends_view.h"
 #include "imgui.h"
+#include "trends_view.h"
 
 #include <cstdio>
 #include <ctime>
@@ -35,19 +35,23 @@ static const ImVec4 kExportButtonHover(0.18f, 0.70f, 0.45f, 1.00f);
 static const ImVec4 kExportButtonActive(0.10f, 0.45f, 0.28f, 1.00f);
 static const ImVec2 kExportButtonSize(260.0f, 55.0f);
 static const char *kExportPopupId = "PDF Export###ExportResultPopup";
-static const ImVec2 kTrendsButtonSize(200.0f, 55.0f);
 
 // Outcome of the last "Export PDF" click, shown in the confirmation popup.
 struct ExportStatus
 {
     ExportResult result;
     bool openedInViewer = false;
+    std::string description = "Your behavior history"; // "... was saved to ..."
 };
 static ExportStatus g_lastExport;
 
+// Set when leaving a day's detail screen, so the calendar comes back scrolled
+// to where the parent left it instead of jumping to the newest days.
+static bool g_returningFromDayDetail = false;
+
 static const char *kWeekdayNames[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
-static int DaysInMonth(int year, int month)
+int DaysInMonth(int year, int month)
 {
     static const int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
     const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -55,7 +59,7 @@ static int DaysInMonth(int year, int month)
 }
 
 // Weekday (0 = Sunday) of the 1st of the given month.
-static int FirstWeekdayOfMonth(int year, int month)
+int FirstWeekdayOfMonth(int year, int month)
 {
     std::tm tm{};
     tm.tm_year = year - 1900;
@@ -67,7 +71,7 @@ static int FirstWeekdayOfMonth(int year, int month)
     return tm.tm_wday;
 }
 
-static std::string MonthTitle(int year, int month)
+std::string MonthTitle(int year, int month)
 {
     static const char *kMonthNames[12] = {
         "January", "February", "March", "April", "May", "June",
@@ -219,8 +223,16 @@ static void DrawLegendItem(const ImVec4 &fill, const ImVec4 *border, const char 
     ImGui::TextWrapped("%s", text);
 }
 
+void ShowPdfExportResult(const ExportResult &result, const char *description)
+{
+    g_lastExport.result = result;
+    g_lastExport.description = description;
+    g_lastExport.openedInViewer = result.success && OpenWithDefaultApp(result.path);
+    ImGui::OpenPopup(kExportPopupId);
+}
+
 // Confirmation (or error) shown after clicking "Export PDF".
-static void DrawExportPopup()
+void DrawExportPopup()
 {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -234,7 +246,8 @@ static void DrawExportPopup()
     {
         ImGui::TextColored(kPointsGained, "Export complete");
         ImGui::Spacing();
-        ImGui::TextWrapped("Your behavior history was saved to your Downloads folder:");
+        ImGui::TextWrapped("%s was saved to your Downloads folder:",
+                           g_lastExport.description.c_str());
         ImGui::TextWrapped("%s", result.path.u8string().c_str());
         ImGui::Spacing();
         if (g_lastExport.openedInViewer)
@@ -293,7 +306,7 @@ static void DrawLegend()
     ImGui::PopStyleColor();
 }
 
-// Calendar view: month grids (newest month first) with a legend on the right.
+// Calendar view: month grids (oldest month first) with a legend on the right.
 void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDate)
 {
     // Title row, with the green "Export PDF" button at the top right
@@ -305,23 +318,12 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     ImGui::SameLine();
     ImGui::TextDisabled("   Current Points: %d", log.currentPoints());
 
-    // "Trends" sits just left of "Export PDF"
-    ImGui::SameLine(rowStartX + rowWidth - kExportButtonSize.x -
-                    ImGui::GetStyle().ItemSpacing.x - kTrendsButtonSize.x);
-    if (ImGui::Button("Trends", kTrendsButtonSize))
-        OpenTrendsScreen(screen, Screen::History);
-
     ImGui::SameLine(rowStartX + rowWidth - kExportButtonSize.x);
     ImGui::PushStyleColor(ImGuiCol_Button, kExportButton);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kExportButtonHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kExportButtonActive);
     if (ImGui::Button("Export PDF", kExportButtonSize))
-    {
-        g_lastExport.result = ExportHistoryPdf(log);
-        g_lastExport.openedInViewer =
-            g_lastExport.result.success && OpenWithDefaultApp(g_lastExport.result.path);
-        ImGui::OpenPopup(kExportPopupId);
-    }
+        ShowPdfExportResult(ExportHistoryPdf(log), "Your behavior history");
     ImGui::PopStyleColor(3);
 
     DrawExportPopup();
@@ -330,6 +332,9 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     {
         screen = Screen::Main;
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Trends", ImVec2(200, 55)))
+        OpenTrendsScreen(screen);
 
     ImGui::Separator();
 
@@ -354,8 +359,9 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
 
     ImGui::BeginChild("Calendar", ImVec2(calendarWidth, 0));
 
-    // Newest month first
-    for (auto it = months.rbegin(); it != months.rend(); ++it)
+    // Months in the order they happen (oldest first), matching the Trends
+    // date pickers. The year * 100 + month key keeps December before January.
+    for (auto it = months.begin(); it != months.end(); ++it)
     {
         const int year = it->first / 100;
         const int month = it->first % 100;
@@ -370,6 +376,16 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
             selectedDate = clicked;
             screen = Screen::DayDetail;
         }
+    }
+
+    // Months run oldest to newest, so when the calendar is taller than the
+    // screen, open it scrolled to the bottom: today and the latest days are
+    // what parents usually want first. (No effect when everything fits.)
+    if (ImGui::IsWindowAppearing())
+    {
+        if (!g_returningFromDayDetail)
+            ImGui::SetScrollHereY(1.0f);
+        g_returningFromDayDetail = false;
     }
 
     ImGui::EndChild();
@@ -387,6 +403,7 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
     if (ImGui::Button("< Back to Calendar", ImVec2(360, 55)))
     {
         screen = Screen::History;
+        g_returningFromDayDetail = true;
     }
 
     ImGui::Separator();

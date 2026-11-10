@@ -1,228 +1,236 @@
 #include "trends_export.h"
 
-#include "pdf_report_writer.h"
+#include "report_writer.h"
 
 #include <utility>
 
 namespace
 {
-using namespace pdf_report;
+using namespace report;
 
-constexpr float kHeaderValueX = kMargin + 125;
+const char *kReportTitle = "Behavior Trends Report";
 
-// Choice Rankings columns
-constexpr float kColRankBehavior = kMargin + 8;
-constexpr float kColRankTimesRight = kMargin + kContentW - 8;
-
-// Time of Day columns
+// Time-of-day table columns
 constexpr float kColHour = kMargin + 8;
-constexpr float kColHourBehavior = kMargin + 110;
-constexpr float kColHourTimesRight = kMargin + kContentW - 8;
-
-// Room for a behavior name before the right-aligned "Times Logged" column.
-constexpr float kRankNameMaxW = kColRankTimesRight - 80 - kColRankBehavior;
-constexpr float kHourNameMaxW = kColHourTimesRight - 80 - kColHourBehavior;
-
-// Shortens text with "..." so it fits in maxWidth (long behavior names would
-// otherwise run into the next column).
-std::string FitText(const std::string &s, Font font, float size, float maxWidth)
-{
-    if (PdfDocument::textWidth(s, font, size) <= maxWidth)
-        return s;
-    std::string cut = s;
-    while (!cut.empty() && PdfDocument::textWidth(cut + "...", font, size) > maxWidth)
-        cut.pop_back();
-    while (!cut.empty() && cut.back() == ' ')
-        cut.pop_back();
-    return cut + "...";
-}
+constexpr float kColName = kMargin + 100;
+constexpr float kColType = kMargin + 350;
+constexpr float kColTimesRight = kMargin + kContentW - 8;
 
 const char *TabTitle(TrendsTab tab)
 {
-    return tab == TrendsTab::Rankings ? "Choice Rankings" : "Time of Day";
+    return tab == TrendsTab::MostLeast ? "Most / Least Logged" : "Time of Day";
 }
 
-void HeaderLine(ReportWriter &w, const std::string &label, const std::string &value)
+const char *OrderText(RankOrder order)
 {
-    w.doc.text(kMargin, w.y + 11, label, Font::Bold, kBodySize, kText);
-    w.doc.text(kHeaderValueX, w.y + 11, value, Font::Regular, kBodySize, kText);
-    w.y += 17;
+    return order == RankOrder::MostFirst ? "Most to least logged" : "Least to most logged";
 }
 
-void RankingTableHeader(ReportWriter &w)
+const char *KindText(ChoiceKind kind)
 {
-    w.tableHeader({{"Behavior", kColRankBehavior}}, {{"Times Logged", kColRankTimesRight}});
-}
-
-void RankingSection(ReportWriter &w, const std::string &title, RankOrder order,
-                    const std::vector<BehaviorCount> &counts, Color nameColor)
-{
-    const std::string caption =
-        std::string(order == RankOrder::MostFirst ? "Most logged first." : "Least logged first.") +
-        " Ties are alphabetical. Choices that were not logged show 0 times.";
-    w.sectionTitle(title, caption);
-
-    if (counts.empty())
+    switch (kind)
     {
-        w.doc.text(kMargin + 8, w.y + 12, "There are no choices of this type.",
+    case ChoiceKind::Good: return "Good choices only";
+    case ChoiceKind::Wrong: return "Wrong choices only";
+    default: return "Good and wrong choices";
+    }
+}
+
+const char *SortText(TimeOfDaySort sort)
+{
+    return sort == TimeOfDaySort::ByHour ? "By time of day (12am to 11pm)"
+                                         : "By most logged (all hours)";
+}
+
+// First and last "YYYY-MM-DD" of the history window that fall inside the
+// filter's date range (used for the file name).
+std::pair<std::string, std::string> ResolvedRange(const BehaviorLog &log,
+                                                  const TrendFilter &filter, std::time_t now)
+{
+    std::string first, last;
+    for (const HistoryDay &day : log.historyWindow(now))
+    {
+        if ((!filter.fromDate.empty() && day.date < filter.fromDate) ||
+            (!filter.toDate.empty() && day.date > filter.toDate))
+            continue;
+        if (first.empty()) first = day.date;
+        last = day.date;
+    }
+    return {first, last};
+}
+
+// One ranking table ("Good Choices" or "Wrong Choices").
+void RankingSection(ReportWriter &w, const std::string &title, const std::vector<BehaviorCount> &rows,
+                    RankOrder order, bool good)
+{
+    w.sectionTitle(title, std::string(OrderText(order)) +
+                              ". Choices that were never logged show 0. Ties are listed A-Z.");
+
+    const float timesRight = kMargin + kContentW - 8;
+    const auto header = [&]
+    { w.tableHeader({{"Behavior", kMargin + 8}}, {{"Times Logged", timesRight}}); };
+    header();
+
+    if (rows.empty())
+    {
+        w.doc.text(kMargin + 8, w.y + 12.5f,
+                   good ? "There are no good choices yet." : "There are no wrong choices yet.",
                    Font::Regular, kBodySize, kMuted);
         w.y += kRowH;
-        return;
     }
 
-    RankingTableHeader(w);
-    int row = 0;
-    for (const BehaviorCount &item : counts)
+    int index = 0;
+    for (const BehaviorCount &row : rows)
     {
         if (w.ensureSpace(kRowH))
-            RankingTableHeader(w);
-        w.zebra(row++);
-        const Color color = item.count == 0 ? kMuted : nameColor;
-        w.doc.text(kColRankBehavior, w.y + 12.5f,
-                   FitText(item.label, Font::Regular, kBodySize, kRankNameMaxW),
-                   Font::Regular, kBodySize, color);
-        w.doc.textRight(kColRankTimesRight, w.y + 12.5f, TimesLabel(item.count),
-                        Font::Regular, kBodySize, item.count == 0 ? kMuted : kText);
+            header();
+        w.zebra(index++);
+        const float baseline = w.y + 12.5f;
+        w.doc.text(kMargin + 8, baseline,
+                   FitText(row.name, Font::Regular, kBodySize, timesRight - kMargin - 100),
+                   Font::Regular, kBodySize, kText);
+        w.doc.textRight(timesRight, baseline, TimesLabel(row.count), Font::Bold, kBodySize,
+                        row.count == 0 ? kMuted : (good ? kGreen : kRed));
         w.y += kRowH;
     }
+    w.y += 14;
 }
 
-void TimeOfDayTableHeader(ReportWriter &w)
+void TimeOfDaySection(ReportWriter &w, const std::vector<HourRow> &rows,
+                      const TrendsReportOptions &options)
 {
-    w.tableHeader({{"Time of Day", kColHour}, {"Behavior", kColHourBehavior}},
-                  {{"Times Logged", kColHourTimesRight}});
-}
+    const bool showType = options.timeKind == ChoiceKind::All;
+    w.sectionTitle("Behaviors by Time of Day",
+                   "How many times each behavior was logged in each one-hour block, "
+                   "across all included days.");
 
-void TimeOfDaySection(ReportWriter &w, const TrendsSettings &settings,
-                      const std::vector<TimeOfDayRow> &rows)
-{
-    const std::string caption =
-        settings.sort == TimeOfDaySort::ByHour
-            ? "Each hour of the day, 12am to 11pm. Green = good choice, red = wrong choice."
-            : "Most logged first; hours with nothing logged are last. Green = good, red = wrong.";
-    w.sectionTitle("Time of Day", caption);
-
-    TimeOfDayTableHeader(w);
-
-    // When sorted by hour, shade by hour block so rows in the same hour group
-    // together visually; otherwise shade every other row.
-    int band = 0;
-    int previousHour = -1;
-    for (size_t i = 0; i < rows.size(); ++i)
+    const auto header = [&]
     {
-        const TimeOfDayRow &row = rows[i];
-        if (w.ensureSpace(kRowH))
-            TimeOfDayTableHeader(w);
+        std::vector<std::pair<std::string, float>> left = {{"Time", kColHour},
+                                                           {"Behavior", kColName}};
+        if (showType)
+            left.push_back({"Type", kColType});
+        w.tableHeader(left, {{"Times Logged", kColTimesRight}});
+    };
+    header();
 
-        if (settings.sort == TimeOfDaySort::ByHour)
+    const float nameWidth = (showType ? kColType : kColTimesRight - 70) - kColName - 8;
+
+    // Sorted by hour: shade alternate hours so each hour reads as a group.
+    // Sorted by count: shade alternate rows.
+    int shade = 0;
+    int previousHour = -1;
+    for (const HourRow &row : rows)
+    {
+        if (options.timeSort == TimeOfDaySort::ByHour)
         {
             if (row.hour != previousHour && previousHour != -1)
-                ++band;
+                ++shade;
             previousHour = row.hour;
-            w.zebra(band);
-        }
-        else
-        {
-            w.zebra(static_cast<int>(i));
         }
 
+        if (w.ensureSpace(kRowH))
+            header();
+        w.zebra(shade);
+        if (options.timeSort == TimeOfDaySort::ByCount)
+            ++shade;
+
         const float baseline = w.y + 12.5f;
-        w.doc.text(kColHour, baseline, HourRangeLabel(row.hour), Font::Regular, kBodySize,
-                   row.isEmptyHour() ? kMuted : kText);
-        if (row.isEmptyHour())
+        w.doc.text(kColHour, baseline, HourBlockLabel(row.hour), Font::Regular, kBodySize, kText);
+
+        if (row.IsEmptyHour())
         {
-            w.doc.text(kColHourBehavior, baseline, NoBehaviorsLoggedText(), Font::Regular,
+            w.doc.text(kColName, baseline, EmptyHourLabel(options.timeKind), Font::Regular,
                        kBodySize, kMuted);
         }
         else
         {
-            w.doc.text(kColHourBehavior, baseline,
-                       FitText(row.label, Font::Regular, kBodySize, kHourNameMaxW),
-                       Font::Regular, kBodySize, row.isGood ? kGreen : kRed);
-            w.doc.textRight(kColHourTimesRight, baseline, TimesLabel(row.count),
-                            Font::Regular, kBodySize, kText);
+            const Color color = row.isGood ? kGreen : kRed;
+            w.doc.text(kColName, baseline, FitText(row.name, Font::Regular, kBodySize, nameWidth),
+                       Font::Regular, kBodySize, kText);
+            if (showType)
+                w.doc.text(kColType, baseline, row.isGood ? "Good" : "Wrong", Font::Regular,
+                           kBodySize, color);
+            w.doc.textRight(kColTimesRight, baseline, TimesLabel(row.count), Font::Bold,
+                            kBodySize, color);
         }
         w.y += kRowH;
     }
+    w.y += 14;
 }
 } // namespace
 
-std::string TrendsPdfFileName(const TrendsSettings &settings)
+std::string TrendsPdfFileName(const BehaviorLog &log, const TrendsReportOptions &options,
+                              std::time_t now)
 {
-    const std::string view = settings.tab == TrendsTab::Rankings ? "Rankings" : "Time_of_Day";
-    return "Behavior_Trends_" + view + "_" + settings.filter.fromDate + "_to_" +
-           settings.filter.toDate + ".pdf";
+    const auto range = ResolvedRange(log, options.filter, now);
+    const std::string view =
+        options.tab == TrendsTab::MostLeast ? "Most_Least" : "Time_of_Day";
+    return "Behavior_Trends_" + view + "_" + range.first + "_to_" + range.second + ".pdf";
 }
 
-std::string BuildTrendsPdf(const BehaviorLog &log, const std::vector<ChoiceInfo> &knownChoices,
-                           const TrendsSettings &settings, std::time_t now)
+std::string BuildTrendsPdf(const BehaviorLog &log, const std::vector<BehaviorChoice> &choices,
+                           const TrendsReportOptions &options, std::time_t now)
 {
-    const TrendFilter &filter = settings.filter;
-    const std::vector<TimedEntry> entries = PrepareTrendEntries(log.entries());
-    const bool rankingsTab = (settings.tab == TrendsTab::Rankings);
+    const FilteredBehaviors data = ApplyTrendFilter(log, options.filter, now);
 
-    // Same builders the Trends screen uses, so the PDF matches the screen.
-    ChoiceRankings rankings;
-    std::vector<TimeOfDayRow> hourRows;
-    if (rankingsTab)
-        rankings = BuildChoiceRankings(entries, knownChoices, filter,
-                                       settings.goodOrder, settings.wrongOrder);
-    else
-        hourRows = BuildTimeOfDay(entries, filter, settings.show, settings.sort);
+    ReportWriter w(std::string("Behavior Tracker - ") + kReportTitle);
+    w.doc.setTitle(kReportTitle);
 
-    // Behaviors listed in this report (for Time of Day this respects the
-    // good/wrong filter, so it always matches the table).
-    const int behaviorsListed = rankingsTab ? CountEntriesIncluded(entries, filter)
-                                            : TotalLogged(hourRows);
-
-    ReportWriter w;
-    w.doc.setTitle("Behavior Trends Report");
-
-    // ---- Report header ------------------------------------------------------
-    w.doc.text(kMargin, w.y + 20, "Behavior Trends Report", Font::Bold, 22, kText);
+    // ---- Report header: exactly which view, filters and sort were used -------
+    w.doc.text(kMargin, w.y + 20, kReportTitle, Font::Bold, 22, kText);
     w.y += 36;
 
-    HeaderLine(w, "View:", TabTitle(settings.tab));
-    for (const auto &line : filter.describe())
-        HeaderLine(w, line.first, line.second);
-    HeaderLine(w, "Days included:",
-               std::to_string(CountDaysIncluded(log.historyWindow(now), filter)));
-    if (!rankingsTab)
-        HeaderLine(w, "Showing:", ChoiceTypeFilterLabel(settings.show));
-    HeaderLine(w, "Behaviors included:", std::to_string(behaviorsListed));
-    if (rankingsTab)
+    std::vector<std::pair<std::string, std::string>> headerLines;
+    headerLines.push_back({"View:", TabTitle(options.tab)});
+    for (const auto &line : options.filter.Describe(log, now))
+        headerLines.push_back(line);
+    headerLines.push_back({"Days included:", std::to_string(data.daysCovered)});
+    if (options.tab == TrendsTab::TimeOfDay)
     {
-        HeaderLine(w, "Good choices:", RankOrderLabel(settings.goodOrder));
-        HeaderLine(w, "Wrong choices:", RankOrderLabel(settings.wrongOrder));
+        headerLines.push_back({"Showing:", KindText(options.timeKind)});
+        headerLines.push_back({"Sorted:", SortText(options.timeSort)});
     }
     else
     {
-        HeaderLine(w, "Sorted:", TimeOfDaySortLabel(settings.sort));
+        headerLines.push_back({"Good choices:", OrderText(options.goodOrder)});
+        headerLines.push_back({"Wrong choices:", OrderText(options.wrongOrder)});
     }
-    HeaderLine(w, "Created:", BehaviorLog::formatFriendlyDate(now) + " at " +
-                                  BehaviorLog::formatFriendlyTime(now));
+    headerLines.push_back({"Created:", BehaviorLog::formatFriendlyDate(now) + " at " +
+                                           BehaviorLog::formatFriendlyTime(now)});
+
+    for (const auto &line : headerLines)
+    {
+        w.doc.text(kMargin, w.y + 11, line.first, Font::Bold, kBodySize, kText);
+        w.doc.text(kMargin + 95, w.y + 11, line.second, Font::Regular, kBodySize, kText);
+        w.y += 17;
+    }
     w.y += 8;
     w.rule();
 
-    // ---- Body -----------------------------------------------------------------
-    if (rankingsTab)
+    // ---- Body ----------------------------------------------------------------
+    if (options.tab == TrendsTab::MostLeast)
     {
-        RankingSection(w, "Good Choices", settings.goodOrder, rankings.good, kGreen);
-        w.y += 14;
-        RankingSection(w, "Wrong Choices", settings.wrongOrder, rankings.wrong, kRed);
+        RankingSection(w, "Good Choices",
+                       RankBehaviors(data.entries, choices, true, options.goodOrder),
+                       options.goodOrder, true);
+        RankingSection(w, "Wrong Choices",
+                       RankBehaviors(data.entries, choices, false, options.wrongOrder),
+                       options.wrongOrder, false);
     }
     else
     {
-        TimeOfDaySection(w, settings, hourRows);
+        TimeOfDaySection(w, TimeOfDayRows(data.entries, options.timeKind, options.timeSort),
+                         options);
     }
 
-    w.footers("Behavior Trends Report");
+    w.footers();
     return w.doc.serialize();
 }
 
-ExportResult ExportTrendsPdf(const BehaviorLog &log, const std::vector<ChoiceInfo> &knownChoices,
-                             const TrendsSettings &settings, std::time_t now)
+ExportResult ExportTrendsPdf(const BehaviorLog &log, const std::vector<BehaviorChoice> &choices,
+                             const TrendsReportOptions &options, std::time_t now)
 {
-    return ExportPdfToDownloads(TrendsPdfFileName(settings),
-                                BuildTrendsPdf(log, knownChoices, settings, now));
+    return SavePdfToDownloads(TrendsPdfFileName(log, options, now),
+                              BuildTrendsPdf(log, choices, options, now));
 }

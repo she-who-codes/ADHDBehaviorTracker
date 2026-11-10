@@ -31,7 +31,7 @@ add_executable(BehaviorTracker
     history_view.cpp
     history_export.cpp
     simple_pdf.cpp
-    behavior_trends.cpp
+    trends.cpp
     trends_view.cpp
     trends_export.cpp
     ${IMGUI_SOURCES}

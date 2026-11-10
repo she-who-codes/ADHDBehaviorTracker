@@ -3,6 +3,7 @@
 #include <string>
 
 #include "behavior_log.h"
+#include "history_export.h"
 
 // Which screen is showing.
 enum class Screen
@@ -12,6 +13,11 @@ enum class Screen
     DayDetail,
     Trends,
 };
+
+// Calendar helpers shared by the History calendar and the Trends date pickers.
+int DaysInMonth(int year, int month);          // month is 1-12
+int FirstWeekdayOfMonth(int year, int month);  // 0 = Sunday ... 6 = Saturday
+std::string MonthTitle(int year, int month);   // "October 2026"
 
 // Week rows (0-based, Sunday-first) of a month's calendar grid that contain
 // at least one day in [firstDay, lastDay]. Weeks outside this range have no
@@ -24,10 +30,18 @@ struct WeekRowRange
 };
 WeekRowRange VisibleWeekRows(int year, int month, int firstDay, int lastDay);
 
-// Calendar view of the history window: one Sun-Sat grid per month (newest
-// month first) plus a legend. Clicking a day switches to Screen::DayDetail
+// Calendar view of the history window: one Sun-Sat grid per month (oldest
+// month first, in the order they happen) plus a legend. Clicking a day switches to Screen::DayDetail
 // and stores its "YYYY-MM-DD" in selectedDate.
 void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDate);
 
 // Full-screen list of every behavior logged on selectedDate.
 void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &selectedDate);
+
+// PDF export confirmation popup, shared by every screen with an "Export PDF"
+// button. Call ShowPdfExportResult() when the button is clicked (it opens the
+// PDF in the default viewer if the export worked), and DrawExportPopup() every
+// frame from the same window. 'description' completes the sentence
+// "... was saved to your Downloads folder", e.g. "Your behavior history".
+void ShowPdfExportResult(const ExportResult &result, const char *description);
+void DrawExportPopup();
