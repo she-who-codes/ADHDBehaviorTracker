@@ -25,3 +25,7 @@ WRONG|1|Ignoring an Adult
 WRONG|4|Pestering the cat
 WRONG|4|Being Deceitful
 WRONG|5|Being Destructive
+GOOD|2|Completed School Project
+WRONG|1|Throwing a hat
+WRONG|1|Dragging a baseball bat
+GOOD|1|Helped bath rat

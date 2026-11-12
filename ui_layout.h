@@ -1,102 +1,115 @@
 #pragma once
 
-// Small layout helpers that keep the screens usable when the app window is
-// made smaller. Rows of buttons "wrap" onto the next line when there is no
-// room left (like words in a paragraph) instead of running off the right
-// edge, and panels get a minimum size so the window scrolls rather than
-// squashing them. When everything fits, these produce exactly the same
-// layout as plain ImGui::SameLine().
+// Small helpers for a fluid layout: rows of controls that wrap onto the next
+// line when the window gets narrow (instead of running off the edge and being
+// cut off), and widths that shrink with the window but never so far that
+// their text gets clipped.
 
 #include "imgui.h"
 
-namespace UiLayout
+#include <algorithm>
+#include <cmath>
+
+namespace ui
 {
 
-// Screen x of the right edge of the area the current row can use.
-inline float RowRight()
+// Right edge (screen X) of the space the current window gives its items.
+inline float ContentRight()
 {
     return ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
 }
 
-// Width of a checkbox with a visible label (box + gap + text).
-inline float CheckboxWidth(const char *label)
-{
-    return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
-           ImGui::CalcTextSize(label, nullptr, true).x;
-}
-
-// Width a button needs to show its whole label.
-inline float ButtonLabelWidth(const char *label)
+// Width a button needs to show 'label' without clipping it.
+inline float ButtonWidthFor(const char *label)
 {
     return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 }
 
-// Use between two items instead of ImGui::SameLine(0, spacing).
-// The next item (nextWidth wide) stays on the same row when it fits before
-// rowRight (screen x; default: the window's right edge). Otherwise it starts
-// a new row, at window-local x 'wrapX' when given (e.g. to line up under a
-// label column). spacing < 0 means the style's normal item spacing.
-// Returns true if the item stays on the same row.
-inline bool SameLineOrWrap(float nextWidth, float spacing = -1.0f, float wrapX = -1.0f,
-                           float rowRight = -1.0f)
+// Call between two items, in place of ImGui::SameLine(0, spacing). Keeps the
+// next item (nextWidth wide) on the current line when it fits; otherwise it
+// starts a new line, at local X 'wrapIndentX' when one is given (e.g. to line
+// up under a label column) and the item fits there. Returns true if it stayed
+// on the same line.
+inline bool SameLineIfFits(float nextWidth, float spacing = -1.0f, float wrapIndentX = -1.0f)
 {
     const float gap = (spacing < 0.0f) ? ImGui::GetStyle().ItemSpacing.x : spacing;
-    const float right = (rowRight < 0.0f) ? RowRight() : rowRight;
-    if (ImGui::GetItemRectMax().x + gap + nextWidth <= right + 0.5f)
+    const float right = ContentRight();
+    if (ImGui::GetItemRectMax().x + gap + nextWidth <= right)
     {
         ImGui::SameLine(0.0f, gap);
         return true;
     }
-    if (wrapX >= 0.0f)
-        ImGui::SetCursorPosX(wrapX);
-    return false;
-}
-
-// Puts the next item (width wide) at the right end of the current row when it
-// fits after the last item; otherwise it starts a new row (at window-local x
-// 'wrapX' when given, else at the row start). Returns true if it stayed on
-// the row.
-inline bool SameLineRightAlignedOrWrap(float width, float wrapX = -1.0f)
-{
-    const float right = RowRight();
-    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <= right + 0.5f)
+    if (wrapIndentX >= 0.0f)
     {
-        // Same position as ImGui::SameLine(rowStartX + rowWidth - width)
-        ImGui::SameLine(right - width - ImGui::GetWindowPos().x + ImGui::GetScrollX());
-        return true;
+        // Screen X of local X 0 (the cursor is at the start of the new line).
+        const float localOrigin = ImGui::GetCursorScreenPos().x - ImGui::GetCursorPosX();
+        if (localOrigin + wrapIndentX + nextWidth <= right)
+            ImGui::SetCursorPosX(wrapIndentX);
     }
-    if (wrapX >= 0.0f)
-        ImGui::SetCursorPosX(wrapX);
     return false;
 }
 
-// Like ImGui::PushTextWrapPos(0.0f) (wrap text at the window's right edge),
-// but always at the *visible* edge. In a window that can scroll sideways,
-// ImGui's default wrap point follows the content width instead, so a long
-// line of text could keep the window wider than the screen after shrinking
-// it. Call at the start of a row; pair with ImGui::PopTextWrapPos().
-inline void PushTextWrapAtVisibleEdge()
+// Puts the next item (width w) against the right edge: on the current line
+// when it fits after the previous item, otherwise right-aligned on a line of
+// its own. Never pushes it past the left edge.
+inline void SameLineRightAligned(float w, float minGap = -1.0f)
 {
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+    const float gap = (minGap < 0.0f) ? ImGui::GetStyle().ItemSpacing.x : minGap;
+    const float right = ContentRight();
+    if (ImGui::GetItemRectMax().x + gap + w <= right)
+        ImGui::SameLine(0.0f, gap);
+    const ImVec2 cursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(ImVec2(std::max(right - w, cursor.x), cursor.y));
 }
 
-// Height for a panel that normally fills the rest of the window (height 0).
-// Returns 0 (fill) while there is enough room, or minHeight when the window
-// is too short, so the panel keeps a usable size and the window scrolls.
-inline float FillHeightAtLeast(float minHeight)
+// Width for each of 'count' side-by-side buttons: 'preferred' when there is
+// room, shrinking to share 'available' (with 'gap' between buttons), but
+// never narrower than 'minimum' (so labels stay readable).
+inline float FitButtonWidth(float preferred, float minimum, int count, float available, float gap)
 {
-    return (ImGui::GetContentRegionAvail().y >= minHeight) ? 0.0f : minHeight;
+    const float shared =
+        std::floor((available - gap * static_cast<float>(count - 1)) / static_cast<float>(count));
+    return std::max(minimum, std::min(preferred, shared));
 }
 
-// Re-centres a popup when the app window has been resized while it is open,
-// so it can't end up off-screen. Call right before SetNextWindowPos(...,
-// ImGuiCond_Appearing) of the popup; 'lastDisplaySize' is per-popup storage.
-inline ImGuiCond CenterCondition(ImVec2 &lastDisplaySize)
+// True for a few frames after the app window changes size (an auto-resizing
+// popup needs a frame or two to settle at its new size).
+inline bool DisplayRecentlyResized()
 {
-    const ImVec2 size = ImGui::GetIO().DisplaySize;
-    const bool resized = (size.x != lastDisplaySize.x || size.y != lastDisplaySize.y);
-    lastDisplaySize = size;
-    return resized ? ImGuiCond_Always : ImGuiCond_Appearing;
+    static ImVec2 lastSize(0.0f, 0.0f);
+    static int lastFrame = -1;
+    static int framesSinceResize = 1000;
+
+    const int frame = ImGui::GetFrameCount();
+    if (frame != lastFrame)
+    {
+        const ImVec2 size = ImGui::GetMainViewport()->Size;
+        if (lastFrame >= 0 && (size.x != lastSize.x || size.y != lastSize.y))
+            framesSinceResize = 0;
+        else if (framesSinceResize < 1000)
+            ++framesSinceResize;
+        lastSize = size;
+        lastFrame = frame;
+    }
+    return framesSinceResize < 3;
 }
 
-} // namespace UiLayout
+// Call right before BeginPopupModal(): centers the popup when it opens, and
+// re-centers it after the app window is resized so it never ends up partly
+// off-screen. (Between resizes it stays wherever the user moved it.)
+inline void CenterNextPopup()
+{
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            DisplayRecentlyResized() ? ImGuiCond_Always : ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+}
+
+// Width for a popup that would like to be 'preferred' wide, narrowed so it
+// still fits inside the app window with a margin on each side.
+inline float FitPopupWidth(float preferred, float minimum = 0.0f)
+{
+    const float margin = ImGui::GetStyle().WindowPadding.x;
+    return std::max(minimum, std::min(preferred, ImGui::GetMainViewport()->Size.x - margin * 2.0f));
+}
+
+} // namespace ui

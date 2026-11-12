@@ -5,6 +5,7 @@
 #include "trends_view.h"
 #include "ui_layout.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <map>
@@ -29,10 +30,10 @@ static const ImVec4 kPointsLost(0.95f, 0.45f, 0.45f, 1.00f);
 
 static const float kCellRounding = 8.0f;
 static const float kCellGap = 8.0f;
+static const float kLegendWidth = 470.0f;       // preferred legend width
+static const float kLegendMinWidth = 360.0f;    // narrower than this, it moves below the calendar
 static const float kMinCellWidth = 110.0f;
 static const float kMaxCellWidth = 210.0f;
-static const float kLegendWidth = 470.0f;     // legend beside the calendar, when there is room
-static const float kLegendMinWidth = 360.0f;  // narrower than this, it moves below the calendar
 
 static const ImVec4 kExportButton(0.12f, 0.55f, 0.35f, 1.00f);      // green, like Good Choices
 static const ImVec4 kExportButtonHover(0.18f, 0.70f, 0.45f, 1.00f);
@@ -238,13 +239,9 @@ void ShowPdfExportResult(const ExportResult &result, const char *description)
 // Confirmation (or error) shown after clicking "Export PDF".
 void DrawExportPopup()
 {
-    // Centred every frame (it can't be moved), so it stays in view if the app
-    // window is resized; narrower than usual when the window is small.
-    const ImGuiViewport *viewport = ImGui::GetMainViewport();
-    float popupWidth = viewport->WorkSize.x - 40.0f;
-    if (popupWidth > 950.0f) popupWidth = 950.0f;
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(popupWidth, 0.0f));
+    // 950 wide, or narrower so it always fits inside the app window.
+    ui::CenterNextPopup();
+    ImGui::SetNextWindowSize(ImVec2(ui::FitPopupWidth(950.0f), 0.0f));
 
     if (!ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
         return;
@@ -317,17 +314,24 @@ static void DrawLegend()
 // Calendar view: month grids (oldest month first) with a legend on the right.
 void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDate)
 {
-    // Title row, with the green "Export PDF" button at the top right.
-    // In a narrow window, the points and the button move down a row.
+    // Title row, with the green "Export PDF" button at the top right. When the
+    // window is narrow, the points move below the title (so the button can
+    // stay at the top right); if even that doesn't fit, the button wraps.
     ImGui::AlignTextToFramePadding();
     ImGui::Text("History - Last 30 Days");
     char pointsText[64];
-    std::snprintf(pointsText, sizeof(pointsText), "   Current Points: %d", log.currentPoints());
-    if (!UiLayout::SameLineOrWrap(ImGui::CalcTextSize(pointsText).x))
-        ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%s", pointsText);
+    std::snprintf(pointsText, sizeof(pointsText), "Current Points: %d", log.currentPoints());
+    const float pointsInlineWidth = ImGui::CalcTextSize("   ").x + ImGui::CalcTextSize(pointsText).x;
+    const bool pointsInline =
+        ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x * 2.0f + pointsInlineWidth +
+            kExportButtonSize.x <= ui::ContentRight();
+    if (pointsInline)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("   %s", pointsText);
+    }
 
-    UiLayout::SameLineRightAlignedOrWrap(kExportButtonSize.x);
+    ui::SameLineRightAligned(kExportButtonSize.x);
     ImGui::PushStyleColor(ImGuiCol_Button, kExportButton);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kExportButtonHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kExportButtonActive);
@@ -335,13 +339,16 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
         ShowPdfExportResult(ExportHistoryPdf(log), "Your behavior history");
     ImGui::PopStyleColor(3);
 
+    if (!pointsInline)
+        ImGui::TextDisabled("%s", pointsText);
+
     DrawExportPopup();
 
     if (ImGui::Button("< Back", ImVec2(200, 55)))
     {
         screen = Screen::Main;
     }
-    UiLayout::SameLineOrWrap(200.0f);
+    ImGui::SameLine();
     if (ImGui::Button("Trends", ImVec2(200, 55)))
         OpenTrendsScreen(screen);
 
@@ -356,33 +363,42 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     for (const HistoryDay &day : days)
         months[day.year * 100 + day.month][day.day] = &day;
 
-    // Size the cells to fit 7 columns beside the legend. In a narrower
-    // window the legend gets narrower first; if the calendar still can't fit
-    // beside it, the legend moves below the calendar (inside its scroll area)
-    // so the calendar can use the full width.
+    // Size the cells to fit 7 columns beside the legend. As the window narrows
+    // the legend shrinks a little, then moves below the calendar so the
+    // calendar keeps the full width.
     const ImGuiStyle &style = ImGui::GetStyle();
     const float availableWidth = ImGui::GetContentRegionAvail().x;
-    const float gridMargin = style.ScrollbarSize + style.WindowPadding.x;
-    const float minCalendarWidth = 7.0f * kMinCellWidth + 6.0f * kCellGap + gridMargin;
-    float legendWidth = availableWidth - style.ItemSpacing.x - minCalendarWidth;
-    if (legendWidth > kLegendWidth) legendWidth = kLegendWidth;
-    const bool legendBeside = (legendWidth >= kLegendMinWidth);
-    const float calendarWidth = legendBeside
-                                    ? availableWidth - legendWidth - style.ItemSpacing.x
-                                    : availableWidth;
-    const float gridWidth = calendarWidth - gridMargin;
+    const float gridSlack = style.ScrollbarSize + style.WindowPadding.x;
+    const float minCalendarWidth = 7.0f * kMinCellWidth + 6.0f * kCellGap + gridSlack;
+
+    float legendWidth = kLegendWidth;
+    float calendarWidth = availableWidth - legendWidth - style.ItemSpacing.x;
+    if (calendarWidth < minCalendarWidth)
+    {
+        legendWidth = std::max(kLegendMinWidth,
+                               availableWidth - minCalendarWidth - style.ItemSpacing.x);
+        calendarWidth = availableWidth - legendWidth - style.ItemSpacing.x;
+    }
+    const bool legendBeside = calendarWidth >= minCalendarWidth;
+    if (!legendBeside)
+        calendarWidth = availableWidth;
+
+    const float gridWidth = calendarWidth - gridSlack;
     float cellWidth = (gridWidth - 6.0f * kCellGap) / 7.0f;
     if (cellWidth > kMaxCellWidth) cellWidth = kMaxCellWidth;
     if (cellWidth < kMinCellWidth) cellWidth = kMinCellWidth;
     const float cellHeight = 20.0f + ImGui::GetTextLineHeight() * 3.0f + 6.0f;
 
-    // Keep at least one week row visible when the window is short (the
-    // whole screen scrolls instead). Scrolls sideways if even the smallest
-    // cells don't fit.
-    const float minCalendarHeight = ImGui::GetTextLineHeight() * 4.0f + cellHeight * 1.5f;
-    ImGui::BeginChild("Calendar",
-                      ImVec2(calendarWidth, UiLayout::FillHeightAtLeast(minCalendarHeight)),
-                      ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    // Fills the rest of the screen; on a very short window it keeps about two
+    // weeks visible and the screen scrolls instead.
+    const float minCalendarHeight = cellHeight * 2.0f + ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+    const float calendarHeight =
+        (ImGui::GetContentRegionAvail().y < minCalendarHeight) ? minCalendarHeight : 0.0f;
+
+    // Scrolls sideways too, in case the window is narrower than the smallest
+    // readable calendar.
+    ImGui::BeginChild("Calendar", ImVec2(calendarWidth, calendarHeight), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_HorizontalScrollbar);
 
     // Months in the order they happen (oldest first), matching the Trends
     // date pickers. The year * 100 + month key keeps December before January.
@@ -415,7 +431,7 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
 
     if (!legendBeside)
     {
-        // Narrow window: legend below the newest month
+        // Narrow window: the legend follows the last month, in the same scroll.
         ImGui::BeginChild("Legend", ImVec2(0, 0),
                           ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
         DrawLegend();
@@ -428,8 +444,7 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     {
         ImGui::SameLine();
 
-        ImGui::BeginChild("Legend", ImVec2(0, UiLayout::FillHeightAtLeast(minCalendarHeight)),
-                          ImGuiChildFlags_Borders);
+        ImGui::BeginChild("Legend", ImVec2(0, calendarHeight), ImGuiChildFlags_Borders);
         DrawLegend();
         ImGui::EndChild();
     }
@@ -457,10 +472,8 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
     if (day == nullptr)
     {
         // Can happen if midnight passes while this screen is open
-        UiLayout::PushTextWrapAtVisibleEdge();
         ImGui::TextWrapped("This day is no longer within the 30-day history, "
                            "so its data has been removed.");
-        ImGui::PopTextWrapPos();
         return;
     }
 
@@ -487,36 +500,56 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
         ImGuiTableFlags_SizingStretchProp |
         ImGuiTableFlags_ScrollY;
 
-    // In a narrow window, keep every column readable and scroll sideways
-    // instead of squashing the "Behavior" column.
-    const ImGuiStyle &style = ImGui::GetStyle();
+    // When the window is too narrow for the usual column widths, the Time,
+    // Points and Total After columns shrink to fit their contents; if the
+    // longest behavior still doesn't fit, the table scrolls sideways instead
+    // of cutting the names off.
+    const ImGuiStyle &tableStyle = ImGui::GetStyle();
     float behaviorWidth = ImGui::CalcTextSize("Behavior").x;
+    float timeWidth = ImGui::CalcTextSize("Time").x;
+    float pointsWidth = ImGui::CalcTextSize("Points").x;
+    float totalWidth = ImGui::CalcTextSize("Total After").x;
+    char number[32];
     for (const BehaviorEntry &entry : day->entries)
     {
-        const float width = ImGui::CalcTextSize(entry.label.c_str()).x;
-        if (width > behaviorWidth) behaviorWidth = width;
+        behaviorWidth = std::max(behaviorWidth, ImGui::CalcTextSize(entry.label.c_str()).x);
+        timeWidth = std::max(timeWidth, ImGui::CalcTextSize(
+            BehaviorLog::formatFriendlyTime(entry.timestamp).c_str()).x);
+        std::snprintf(number, sizeof(number), "%+d", entry.delta);
+        pointsWidth = std::max(pointsWidth, ImGui::CalcTextSize(number).x);
+        std::snprintf(number, sizeof(number), "%d", entry.pointsAfter);
+        totalWidth = std::max(totalWidth, ImGui::CalcTextSize(number).x);
     }
-    const float minTableWidth = 170.0f + 120.0f + 180.0f + behaviorWidth +
-                                4.0f * 2.0f * style.CellPadding.x + style.ScrollbarSize;
+    const float padding = tableStyle.CellPadding.x * 2.0f * 4.0f; // 4 columns
+    const float room = ImGui::GetContentRegionAvail().x - tableStyle.ScrollbarSize;
+    if (170.0f + behaviorWidth + 120.0f + 180.0f + padding <= room)
+    {
+        timeWidth = 170.0f; // the usual widths
+        pointsWidth = 120.0f;
+        totalWidth = 180.0f;
+    }
+    const float neededWidth = timeWidth + behaviorWidth + pointsWidth + totalWidth + padding;
     float innerWidth = 0.0f;
-    if (ImGui::GetContentRegionAvail().x < minTableWidth)
+    if (room < neededWidth)
     {
         tableFlags |= ImGuiTableFlags_ScrollX;
-        innerWidth = minTableWidth;
+        innerWidth = neededWidth;
     }
 
-    // In a short window, keep several rows visible (the screen scrolls instead)
-    const float rowHeight = ImGui::GetTextLineHeight() + 2.0f * style.CellPadding.y;
-    const ImVec2 tableSize(0.0f,
-                           UiLayout::FillHeightAtLeast(rowHeight * 8.0f + style.ScrollbarSize));
+    // Fills the rest of the screen, but keeps a few rows visible on a short
+    // window (the screen scrolls down to it instead).
+    const float minTableHeight =
+        (ImGui::GetTextLineHeight() + tableStyle.CellPadding.y * 2.0f) * 5.0f +
+        tableStyle.ScrollbarSize;
+    const float tableHeight = (ImGui::GetContentRegionAvail().y < minTableHeight) ? minTableHeight : 0.0f;
 
-    if (ImGui::BeginTable("DayEntries", 4, tableFlags, tableSize, innerWidth))
+    if (ImGui::BeginTable("DayEntries", 4, tableFlags, ImVec2(0.0f, tableHeight), innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1); // keep the header visible
-        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, timeWidth);
         ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-        ImGui::TableSetupColumn("Total After", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, pointsWidth);
+        ImGui::TableSetupColumn("Total After", ImGuiTableColumnFlags_WidthFixed, totalWidth);
         // Header row drawn as plain text (not TableHeadersRow(), whose cells
         // are interactive sort/menu buttons). Keeps the header background.
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);

@@ -6,6 +6,8 @@
 #include "ui_layout.h"
 
 #include <algorithm>
+#include <cfloat>
+#include <cstdarg>
 #include <cstdio>
 #include <ctime>
 #include <map>
@@ -133,10 +135,25 @@ static void Hint(const char *text)
     ImGui::PopStyleColor();
     if (!showing)
         return;
-    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+    // About 30 characters wide, or less so the hint fits in a small window.
+    ImGui::PushTextWrapPos(std::min(ImGui::GetFontSize() * 30.0f,
+                                    ImGui::GetMainViewport()->Size.x -
+                                        ImGui::GetStyle().WindowPadding.x * 4.0f));
     ImGui::TextUnformatted(text);
     ImGui::PopTextWrapPos();
     ImGui::EndTooltip();
+}
+
+// Coloured text that wraps at the edge of the window instead of running off it.
+static void TextWrappedColored(const ImVec4 &color, const char *fmt, ...) IM_FMTARGS(2);
+static void TextWrappedColored(const ImVec4 &color, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::TextWrappedV(fmt, args);
+    ImGui::PopStyleColor();
+    va_end(args);
 }
 
 // One button of a SegmentedToggle.
@@ -148,26 +165,39 @@ struct ToggleOption
     const char *hint; // shown on hover
 };
 
-static const float kToggleGap = 4.0f;
+static const float kToggleGap = 4.0f; // between the buttons of a SegmentedToggle
 
-// Total width of a SegmentedToggle's buttons when they are all on one row.
-static float SegmentedToggleWidth(int count, float buttonWidth)
+// Button width for a SegmentedToggle: 'preferred' when there is room, shrinking
+// to fit in 'available', but never so narrow that a label gets cut off.
+template <typename T>
+static float FitToggleWidth(const std::vector<ToggleOption<T>> &options, float preferred,
+                            float available)
 {
-    return static_cast<float>(count) * buttonWidth + static_cast<float>(count - 1) * kToggleGap;
+    float widest = 0.0f;
+    for (const ToggleOption<T> &option : options)
+        widest = std::max(widest, ui::ButtonWidthFor(option.label));
+    return ui::FitButtonWidth(preferred, widest, static_cast<int>(options.size()), available,
+                              kToggleGap);
 }
 
-// A row of buttons where exactly one is "on". If the window is too narrow,
-// the buttons that don't fit wrap onto the next row, under the first one.
+// Total width of a SegmentedToggle with 'count' buttons 'buttonWidth' wide.
+static float ToggleGroupWidth(size_t count, float buttonWidth)
+{
+    return static_cast<float>(count) * buttonWidth +
+           static_cast<float>(count - 1) * kToggleGap;
+}
+
+// A row of buttons where exactly one is "on". (If the window is too narrow
+// for the whole row, the buttons that don't fit wrap onto the next line.)
 template <typename T>
 static void SegmentedToggle(const char *id, const std::vector<ToggleOption<T>> &options,
                             T &value, float buttonWidth)
 {
-    const float startX = ImGui::GetCursorPosX();
     ImGui::PushID(id);
     for (size_t i = 0; i < options.size(); ++i)
     {
         if (i > 0)
-            UiLayout::SameLineOrWrap(buttonWidth, kToggleGap, startX);
+            ui::SameLineIfFits(buttonWidth, kToggleGap);
         const bool on = (value == options[i].value);
         ImGui::PushStyleColor(ImGuiCol_Button, on ? kToggleOn : kToggleOff);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? kToggleOnHover : kToggleOffHover);
@@ -194,8 +224,6 @@ static const ImVec4 kOutsideDayText(0.58f, 0.60f, 0.66f, 0.35f);  // not in the 
 static const ImVec2 kPickerCell(56.0f, 46.0f);
 static const float kPickerGap = 6.0f;
 static const float kPickerRounding = 6.0f;
-static const float kPickerMonthGap = 40.0f;   // between months shown side by side
-static const float kDateComboWidth = 260.0f;
 
 // Draws one month as a Sun-Sat grid. Days inside the history window can be
 // clicked; the rest are faded and can't be picked. The first and last day of
@@ -286,8 +314,14 @@ static bool DrawPickerMonth(int year, int month,
 }
 
 // A date box that opens a calendar: every month the history window touches,
-// side by side in the order they happen (e.g. October, then November).
-// rangeFrom/rangeTo highlight the currently chosen range. Returns true if changed.
+// side by side in the order they happen (e.g. October, then November), or one
+// above the other when the app window is narrow. rangeFrom/rangeTo highlight
+// the currently chosen range. Returns true if changed.
+//
+// The box is a normal combo box, but the calendar opens in a popup of our own
+// (not the combo's), because ImGui always lines a combo's popup up with the
+// box; we need to place it ourselves so it stays centered and clear of the
+// window's edges and scrollbar when the window is narrow.
 static bool DateCombo(const char *id, const std::vector<HistoryDay> &days, std::string &date,
                       const std::string &rangeFrom, const std::string &rangeTo, const char *hint)
 {
@@ -296,82 +330,141 @@ static bool DateCombo(const char *id, const std::vector<HistoryDay> &days, std::
         if (day.date == date)
             preview = ShortDateLabel(day);
 
-    bool changed = false;
-    ImGui::SetNextItemWidth(kDateComboWidth);
-    // Let the popup grow to fit the calendar (a combo normally matches its
-    // box's width and a list's height), but no bigger than the app window:
-    // in a small window the calendar scrolls instead of being cut off.
+    const ImGuiStyle &style = ImGui::GetStyle();
+    const std::string calendarId = std::string(id) + "Calendar";
+    const bool calendarOpen = ImGui::IsPopupOpen(calendarId.c_str());
+
+    // ---- The date box ----------------------------------------------------------
+    // While the calendar is open, the box's arrow stays lit as it would for a
+    // combo's own popup.
+    ImGui::SetNextItemWidth(260.0f);
+    if (calendarOpen)
+        ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonHovered]);
+    const bool boxClicked = ImGui::BeginCombo(id, preview.c_str());
+    if (calendarOpen)
+        ImGui::PopStyleColor();
+    // Where the box is, to place the calendar just under it (remembered from
+    // the frames where the box is the last item drawn).
+    static std::map<std::string, std::pair<ImVec2, ImVec2>> boxRects;
+    if (!boxClicked)
+        boxRects[id] = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+
+    if (boxClicked)
+    {
+        // Swap the combo's (empty, not yet shown) popup for the calendar.
+        ImGui::CloseCurrentPopup();
+        ImGui::EndCombo();
+        ImGui::OpenPopup(calendarId.c_str());
+    }
+    else if (!calendarOpen)
+    {
+        Hint(hint); // (not while the calendar itself is showing)
+    }
+
+    if (!ImGui::IsPopupOpen(calendarId.c_str()))
+        return false;
+
+    // ---- Calendar layout ---------------------------------------------------------
+    // Group the window's days by month; the key (year * 100 + month) sorts
+    // chronologically, including December -> January.
+    std::map<int, std::map<int, const HistoryDay *>> months;
+    for (const HistoryDay &day : days)
+        months[day.year * 100 + day.month][day.day] = &day;
+
+    // Months sit side by side when the app window is wide enough, otherwise
+    // one above the other (the calendar scrolls if it is taller than the window).
+    const float monthGap = 40.0f;
+    const float monthWidth = 7.0f * (kPickerCell.x + kPickerGap) - kPickerGap;
+    const float monthCount = static_cast<float>(months.size());
+    const float sideBySideWidth = monthCount * monthWidth + (monthCount - 1.0f) * monthGap;
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
-    const ImVec2 safePadding = ImGui::GetStyle().DisplaySafeAreaPadding;
-    const ImVec2 maxPopupSize(viewport->WorkSize.x - 2.0f * safePadding.x,
-                              viewport->WorkSize.y - 2.0f * safePadding.y);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxPopupSize);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, kPickerBg); // read when the popup opens
-    const bool open = ImGui::BeginCombo(id, preview.c_str());
+    const float roomForMonths = viewport->Size.x - style.WindowPadding.x * 4.0f;
+    const bool monthsSideBySide = sideBySideWidth <= roomForMonths;
+    const float calendarWidth = monthsSideBySide ? sideBySideWidth : monthWidth;
+
+    // ---- Calendar position -----------------------------------------------------
+    // Keep a margin from the window's edges, so the calendar never covers the
+    // scrollbar. Normally it opens just below the box, lined up with it, like
+    // a combo box. On a narrow window (or if it wouldn't fit there) it is
+    // centered. If it doesn't fit below the box it goes above, and if it is
+    // taller than the window allows, it is centered and scrolls.
+    static std::map<std::string, ImVec2> calendarSizes; // size last frame
+    const ImVec2 size = calendarSizes[id];
+    const ImVec2 boxMin = boxRects[id].first;
+    const ImVec2 boxMax = boxRects[id].second;
+    const float margin = style.WindowPadding.x;
+    const float left = viewport->WorkPos.x + margin;
+    const float right = viewport->WorkPos.x + viewport->WorkSize.x - margin;
+    const float top = viewport->WorkPos.y + margin;
+    const float bottom = viewport->WorkPos.y + viewport->WorkSize.y - margin;
+
+    ImVec2 pos(boxMin.x, boxMax.y);
+    if (!monthsSideBySide || pos.x + size.x > right)
+        pos.x = std::max(left, viewport->WorkPos.x + (viewport->WorkSize.x - size.x) * 0.5f);
+    if (pos.y + size.y > bottom)
+    {
+        if (boxMin.y - size.y >= top)
+            pos.y = boxMin.y - size.y;
+        else
+            pos.y = std::max(top, viewport->WorkPos.y + (viewport->WorkSize.y - size.y) * 0.5f);
+    }
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f),
+                                        ImVec2(right - left, bottom - top));
+
+    // Same look as a combo's popup: solid background, and the horizontal
+    // padding lines the calendar up with the text in the box.
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, kPickerBg);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(style.FramePadding.x, style.WindowPadding.y));
+    const bool open = ImGui::BeginPopup(calendarId.c_str(), ImGuiWindowFlags_NoMove);
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor();
     if (!open)
-        Hint(hint); // (not while the calendar itself is showing)
-    if (open)
+        return false;
+
+    bool changed = false;
+    const std::string &today = days.back().date;
+    bool firstMonth = true;
+    for (const auto &month : months)
     {
-        // Group the window's days by month; the key (year * 100 + month)
-        // sorts chronologically, including December -> January.
-        std::map<int, std::map<int, const HistoryDay *>> months;
-        for (const HistoryDay &day : days)
-            months[day.year * 100 + day.month][day.day] = &day;
+        if (!firstMonth && monthsSideBySide)
+            ImGui::SameLine(0.0f, monthGap);
+        firstMonth = false;
 
-        // Months side by side when the app window is wide enough for them,
-        // otherwise one above the other.
-        const ImGuiStyle &style = ImGui::GetStyle();
-        const float monthWidth = 7.0f * (kPickerCell.x + kPickerGap) - kPickerGap;
-        const float monthCount = static_cast<float>(months.size());
-        const float rowOfMonthsWidth =
-            monthCount * monthWidth + (monthCount - 1.0f) * kPickerMonthGap;
-        // (room for a scrollbar too, if the window is too short to show it all)
-        const float scrollbarWidth = (ImGui::GetScrollMaxY() > 0.0f) ? style.ScrollbarSize : 0.0f;
-        const bool sideBySide =
-            rowOfMonthsWidth + 2.0f * style.FramePadding.x + scrollbarWidth <= maxPopupSize.x;
-        const float calendarsWidth = sideBySide ? rowOfMonthsWidth : monthWidth;
-
-        const std::string &today = days.back().date;
-        bool firstMonth = true;
-        for (const auto &month : months)
+        std::string picked;
+        ImGui::PushID(month.first);
+        if (DrawPickerMonth(month.first / 100, month.first % 100, month.second,
+                            rangeFrom, rangeTo, today, picked))
         {
-            if (!firstMonth)
-            {
-                if (sideBySide)
-                    ImGui::SameLine(0.0f, kPickerMonthGap);
-                else
-                    ImGui::Spacing();
-            }
-            firstMonth = false;
-
-            std::string picked;
-            ImGui::PushID(month.first);
-            if (DrawPickerMonth(month.first / 100, month.first % 100, month.second,
-                                rangeFrom, rangeTo, today, picked))
-            {
-                date = picked;
-                changed = true;
-            }
-            ImGui::PopID();
+            date = picked;
+            changed = true;
         }
-
-        // Explanation under the calendars, wrapped to their width
-        ImGui::Spacing();
-        const float textRight = ImGui::GetCursorScreenPos().x + calendarsWidth;
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + calendarsWidth);
-        ImGui::TextColored(kMutedText, "Bright: first and last chosen day. Shaded: days between.");
-        UiLayout::SameLineOrWrap(ImGui::CalcTextSize("Gold outline: today.").x, -1.0f, -1.0f,
-                                 textRight);
-        ImGui::TextColored(kTodayOutline, "Gold outline: today.");
-        ImGui::TextColored(kMutedText, "Faded dates are outside the %d-day history.",
-                           static_cast<int>(days.size()));
-        ImGui::PopTextWrapPos();
-
-        if (changed)
-            ImGui::CloseCurrentPopup();
-        ImGui::EndCombo();
+        ImGui::PopID();
     }
+
+    // The notes wrap to the calendar's width instead of widening it.
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + calendarWidth);
+    const char *rangeNote = "Bright: first and last chosen day. Shaded: days between.";
+    const char *todayNote = "Gold outline: today.";
+    ImGui::PushStyleColor(ImGuiCol_Text, kMutedText);
+    ImGui::TextWrapped("%s", rangeNote);
+    ImGui::PopStyleColor();
+    if (ImGui::CalcTextSize(rangeNote).x + style.ItemSpacing.x +
+            ImGui::CalcTextSize(todayNote).x <= calendarWidth)
+        ImGui::SameLine();
+    ImGui::TextColored(kTodayOutline, "%s", todayNote);
+    ImGui::PushStyleColor(ImGuiCol_Text, kMutedText);
+    ImGui::TextWrapped("Faded dates are outside the %d-day history.",
+                       static_cast<int>(days.size()));
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+
+    calendarSizes[id] = ImGui::GetWindowSize();
+    if (changed)
+        ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
     return changed;
 }
 
@@ -383,21 +476,16 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
     TrendFilter &filter = state.options.filter;
     const float labelColumn = 150.0f;
 
-    // In a narrow window, the controls of each row wrap onto extra rows
-    // (lined up after the "Dates:" / "Days:" labels) and the panel grows
-    // taller to fit them. It never gets narrower than its widest control
-    // ("to" + a date box, after the label column); below that the whole
-    // screen scrolls sideways instead.
-    const ImGuiStyle &style = ImGui::GetStyle();
-    const float minPanelWidth = labelColumn + ImGui::CalcTextSize("to").x + style.ItemSpacing.x +
-                                kDateComboWidth + 2.0f * style.WindowPadding.x;
-    const float panelWidth =
-        (ImGui::GetContentRegionAvail().x < minPanelWidth) ? minPanelWidth : 0.0f; // 0 = full width
-    ImGui::BeginChild("Filters", ImVec2(panelWidth, 0.0f),
+    ImGui::BeginChild("Filters", ImVec2(0.0f, 0.0f),
                       ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
+    // Controls that don't fit on a row wrap onto the next line, lined up
+    // under the first control (after the "Dates:" / "Days:" labels).
+    const float panelStartX = ImGui::GetCursorPosX();
+    const float panelWidth = ImGui::GetContentRegionAvail().x;
+    const float controlsWidth = panelWidth - (labelColumn - panelStartX);
     const ImVec2 resetButtonSize(230.0f, 0.0f);
-    const float dayButtonWidth = 220.0f; // "All days" / "Clear days"
+    const float dateComboWidth = 260.0f;
 
     // ---- Date range ----------------------------------------------------------
     ImGui::AlignTextToFramePadding();
@@ -411,10 +499,10 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
         state.presetDays = 0;
         if (filter.fromDate > filter.toDate) filter.toDate = filter.fromDate;
     }
-    // "to" and the second date box stay together
-    UiLayout::SameLineOrWrap(ImGui::CalcTextSize("to").x + style.ItemSpacing.x + kDateComboWidth,
-                             -1.0f, labelColumn);
-    ImGui::AlignTextToFramePadding();
+    ui::SameLineIfFits(ImGui::CalcTextSize("to").x + ImGui::GetStyle().ItemSpacing.x +
+                           dateComboWidth,
+                       -1.0f, labelColumn);
+    ImGui::AlignTextToFramePadding(); // lines up with the combo if it wrapped
     ImGui::TextUnformatted("to");
     ImGui::SameLine();
     if (DateCombo("##to", days, filter.toDate, rangeFrom, rangeTo,
@@ -424,18 +512,18 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
         if (filter.toDate < filter.fromDate) filter.fromDate = filter.toDate;
     }
 
-    const float presetButtonWidth = 220.0f;
-    UiLayout::SameLineOrWrap(SegmentedToggleWidth(3, presetButtonWidth), 40.0f, labelColumn);
     const int windowDays = static_cast<int>(days.size());
     const std::string allLabel = "All " + std::to_string(windowDays) + " days";
     int preset = state.presetDays;
     const std::string allHint = "Count everything stored: today and the " +
                                 std::to_string(windowDays - 1) + " days before it.";
-    SegmentedToggle<int>("presets",
-                         {{"Last 7 days", 7, "Count only the last 7 days, including today."},
-                          {"Last 14 days", 14, "Count only the last 14 days, including today."},
-                          {allLabel.c_str(), windowDays, allHint.c_str()}},
-                         preset, presetButtonWidth);
+    const std::vector<ToggleOption<int>> presetOptions = {
+        {"Last 7 days", 7, "Count only the last 7 days, including today."},
+        {"Last 14 days", 14, "Count only the last 14 days, including today."},
+        {allLabel.c_str(), windowDays, allHint.c_str()}};
+    const float presetWidth = FitToggleWidth(presetOptions, 220.0f, controlsWidth);
+    ui::SameLineIfFits(ToggleGroupWidth(presetOptions.size(), presetWidth), 40.0f, labelColumn);
+    SegmentedToggle<int>("presets", presetOptions, preset, presetWidth);
     if (preset != state.presetDays)
     {
         state.presetDays = preset;
@@ -444,8 +532,8 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
 
     // "Reset to Defaults" lives at the right edge of the Dates row, clear of
     // the preset buttons, and undoes every filter/sort choice on this screen.
-    // (In a narrow window it goes on its own row, under the date boxes.)
-    UiLayout::SameLineRightAlignedOrWrap(resetButtonSize.x, labelColumn);
+    // (On a narrow window it drops to its own line, still at the right edge.)
+    ui::SameLineRightAligned(resetButtonSize.x, 40.0f);
     if (ImGui::Button("Reset to Defaults", resetButtonSize))
         ResetTrendsToDefaults(state, days);
     Hint("Undo every choice on this screen: all stored days, every day of the week, "
@@ -455,10 +543,13 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Days:");
     ImGui::SameLine(labelColumn);
+    const ImGuiStyle &style = ImGui::GetStyle();
     for (int d = 0; d < 7; ++d)
     {
         if (d > 0)
-            UiLayout::SameLineOrWrap(UiLayout::CheckboxWidth(kWeekdayShort[d]), 24.0f, labelColumn);
+            ui::SameLineIfFits(ImGui::GetFrameHeight() + style.ItemInnerSpacing.x +
+                                   ImGui::CalcTextSize(kWeekdayShort[d]).x,
+                               24.0f, labelColumn);
         static const char *kDayHints[7] = {
             "Include Sundays. Uncheck to leave them out.",
             "Include Mondays. Uncheck to leave them out.",
@@ -472,8 +563,11 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
             filter.weekdays[d] = on;
         Hint(kDayHints[d]);
     }
-    // "All days" and "Clear days" move to the next row together if needed
-    UiLayout::SameLineOrWrap(2.0f * dayButtonWidth + style.ItemSpacing.x, 40.0f, labelColumn);
+    const float dayButtonWidth =
+        ui::FitButtonWidth(220.0f, std::max(ui::ButtonWidthFor("All days"),
+                                            ui::ButtonWidthFor("Clear days")),
+                           2, controlsWidth, style.ItemSpacing.x);
+    ui::SameLineIfFits(dayButtonWidth * 2.0f + style.ItemSpacing.x, 40.0f, labelColumn);
     ImGui::BeginDisabled(filter.AllWeekdays());
     if (ImGui::Button("All days", ImVec2(dayButtonWidth, 0.0f)))
         filter.weekdays.fill(true);
@@ -481,7 +575,7 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
     Hint(filter.AllWeekdays() ? "All seven days are already checked."
                               : "Check all seven days of the week.");
 
-    UiLayout::SameLineOrWrap(dayButtonWidth, -1.0f, labelColumn);
+    ImGui::SameLine();
     ImGui::BeginDisabled(filter.NoWeekdays());
     if (ImGui::Button("Clear days", ImVec2(dayButtonWidth, 0.0f)))
         filter.weekdays.fill(false);
@@ -492,19 +586,17 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
                "At least one day must be checked to see trends.");
 
     // ---- What the counts below are based on ----------------------------------
-    UiLayout::PushTextWrapAtVisibleEdge(); // wrap at the panel's edge in a narrow window
     if (filter.NoWeekdays())
     {
-        ImGui::TextColored(kWarningText, "Pick at least one day of the week to see trends.");
+        TextWrappedColored(kWarningText, "Pick at least one day of the week to see trends.");
     }
     else
     {
         const size_t n = data.entries.size();
-        ImGui::TextColored(kMutedText, "Counting %zu logged behavior%s from %d day%s (%s).", n,
+        TextWrappedColored(kMutedText, "Counting %zu logged behavior%s from %d day%s (%s).", n,
                            n == 1 ? "" : "s", data.daysCovered, data.daysCovered == 1 ? "" : "s",
                            DescribeWeekdays(filter.weekdays).c_str());
     }
-    ImGui::PopTextWrapPos();
 
     ImGui::EndChild();
 }
@@ -524,53 +616,113 @@ static void PlainHeaderRow(int columns)
 static const ImGuiTableFlags kTableFlags =
     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
 
-// Height of one table row.
-static float TableRowHeight()
-{
-    return ImGui::GetTextLineHeight() + 2.0f * ImGui::GetStyle().CellPadding.y;
-}
-
-// When the space for a table is narrower than it needs to show every column
-// (fixedWidth for the fixed columns + the longest behavior name), turns on
-// sideways scrolling and returns the width to lay the columns out in (the
-// 'inner_width' of BeginTable). Otherwise the table is unchanged (returns 0).
-static float ScrollXIfTooNarrow(ImGuiTableFlags &flags, int columns, float fixedWidth,
-                                float nameWidth)
+// Shortest a results table (or ranking column) gets on a small window: the
+// header plus a few rows. Below that the screen scrolls instead.
+static float MinTableHeight()
 {
     const ImGuiStyle &style = ImGui::GetStyle();
-    const float needed = fixedWidth + nameWidth +
-                         static_cast<float>(columns) * 2.0f * style.CellPadding.x +
-                         style.ScrollbarSize;
-    if (ImGui::GetContentRegionAvail().x >= needed)
-        return 0.0f;
-    flags |= ImGuiTableFlags_ScrollX;
-    return needed;
+    const float rowHeight = ImGui::GetTextLineHeight() + style.CellPadding.y * 2.0f;
+    return rowHeight * 5.0f + style.ScrollbarSize;
 }
 
-static const float kRankingToggleWidth = 220.0f; // "Most first" / "Least first"
+// Sets 'flags' and returns the inner width for BeginTable(): the table fills
+// the space as usual, but if that is narrower than 'neededWidth' (so names
+// would be cut off) it scrolls sideways instead.
+static float TableInnerWidth(float neededWidth, ImGuiTableFlags &flags)
+{
+    neededWidth += ImGui::GetStyle().ScrollbarSize;
+    if (ImGui::GetContentRegionAvail().x >= neededWidth)
+        return 0.0f;
+    flags |= ImGuiTableFlags_ScrollX;
+    return neededWidth;
+}
 
-// One column of the "Most / Least Logged" tab. height 0 = the rest of the window.
-static void DrawRankingColumn(const char *id, const char *title, bool good, float width,
-                              float height, const std::vector<BehaviorEntry> &entries,
+// Height to pass to BeginTable(): 0 (fill the rest of the window) unless that
+// would leave too little room for the table to be usable.
+static float TableOuterHeight()
+{
+    return (ImGui::GetContentRegionAvail().y < MinTableHeight()) ? MinTableHeight() : 0.0f;
+}
+
+// Width for a fixed-width table column: 'preferred' when the table has room
+// for it next to everything else ('rest': the other columns plus all cell
+// padding), otherwise just wide enough for its contents ('compact'), so the
+// behavior names beside it aren't squeezed.
+static float FixedColumnWidth(float preferred, float compact, float rest)
+{
+    const float room = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;
+    return (rest + preferred <= room) ? preferred : std::min(preferred, compact);
+}
+
+// Widest "N times" label among 'rows' (or the column header).
+template <typename Rows>
+static float WidestTimesLabel(const Rows &rows, const char *header)
+{
+    float widest = ImGui::CalcTextSize(header).x;
+    for (const auto &row : rows)
+        widest = std::max(widest, ImGui::CalcTextSize(TimesLabel(row.count).c_str()).x);
+    return widest;
+}
+
+// Widest behavior name among 'rows' (or the column header), for TableInnerWidth().
+template <typename Rows>
+static float WidestName(const Rows &rows, const char *header)
+{
+    float widest = ImGui::CalcTextSize(header).x;
+    for (const auto &row : rows)
+        widest = std::max(widest, ImGui::CalcTextSize(row.name.c_str()).x);
+    return widest;
+}
+
+// One column of the "Most / Least Logged" tab.
+// Narrowest a ranking column can be with its buttons and its table (names and
+// counts) still readable without scrolling sideways.
+static float RankingColumnMinWidth(const std::vector<BehaviorEntry> &entries,
+                                   const std::vector<BehaviorChoice> &choices)
+{
+    const ImGuiStyle &style = ImGui::GetStyle();
+    float content = ui::ButtonWidthFor("Least first") * 2.0f + kToggleGap;
+    for (const bool good : {true, false})
+    {
+        const std::vector<BehaviorCount> rows =
+            RankBehaviors(entries, choices, good, RankOrder::MostFirst);
+        const float table = WidestName(rows, "Behavior") + WidestTimesLabel(rows, "Times Logged") +
+                            style.CellPadding.x * 4.0f + style.ScrollbarSize;
+        content = std::max(content, table);
+    }
+    return content + style.WindowPadding.x * 2.0f;
+}
+
+// Shortest a ranking column can be with its title, buttons and a few rows.
+static float RankingColumnMinHeight()
+{
+    const ImGuiStyle &style = ImGui::GetStyle();
+    return style.WindowPadding.y * 2.0f + ImGui::GetFontSize() * 1.3f + ImGui::GetFrameHeight() +
+           style.ItemSpacing.y * 3.0f + MinTableHeight();
+}
+
+static void DrawRankingColumn(const char *id, const char *title, bool good, const ImVec2 &size,
+                              const std::vector<BehaviorEntry> &entries,
                               const std::vector<BehaviorChoice> &choices, RankOrder &order)
 {
-    ImGui::BeginChild(id, ImVec2(width, height), ImGuiChildFlags_Borders);
+    ImGui::BeginChild(id, size, ImGuiChildFlags_Borders);
 
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.3f);
     ImGui::TextColored(good ? kGoodText : kWrongText, "%s", title);
     ImGui::PopFont();
 
+    const std::vector<ToggleOption<RankOrder>> orderOptions = {
+        {"Most first", RankOrder::MostFirst,
+         good ? "List good choices from most logged to least logged."
+              : "List wrong choices from most logged to least logged."},
+        {"Least first", RankOrder::LeastFirst,
+         good ? "List good choices from least logged to most logged. "
+                "Good choices never logged (0 times) come first."
+              : "List wrong choices from least logged to most logged. "
+                "Wrong choices never logged (0 times) come first."}};
     SegmentedToggle<RankOrder>(
-        "order",
-        {{"Most first", RankOrder::MostFirst,
-          good ? "List good choices from most logged to least logged."
-               : "List wrong choices from most logged to least logged."},
-         {"Least first", RankOrder::LeastFirst,
-          good ? "List good choices from least logged to most logged. "
-                 "Good choices never logged (0 times) come first."
-               : "List wrong choices from least logged to most logged. "
-                 "Wrong choices never logged (0 times) come first."}},
-        order, kRankingToggleWidth);
+        "order", orderOptions, order,
+        FitToggleWidth(orderOptions, 220.0f, ImGui::GetContentRegionAvail().x));
     ImGui::Spacing();
 
     const std::vector<BehaviorCount> rows = RankBehaviors(entries, choices, good, order);
@@ -582,17 +734,17 @@ static void DrawRankingColumn(const char *id, const char *title, bool good, floa
         return;
     }
 
-    float nameWidth = ImGui::CalcTextSize("Behavior").x;
-    for (const BehaviorCount &row : rows)
-        nameWidth = std::max(nameWidth, ImGui::CalcTextSize(row.name.c_str()).x);
-    ImGuiTableFlags tableFlags = kTableFlags;
-    const float innerWidth = ScrollXIfTooNarrow(tableFlags, 2, 210.0f, nameWidth);
-
-    if (ImGui::BeginTable("Ranking", 2, tableFlags, ImVec2(0.0f, 0.0f), innerWidth))
+    const float padding = ImGui::GetStyle().CellPadding.x * 2.0f * 2.0f; // 2 columns
+    const float nameWidth = WidestName(rows, "Behavior");
+    const float timesWidth =
+        FixedColumnWidth(210.0f, WidestTimesLabel(rows, "Times Logged"), nameWidth + padding);
+    ImGuiTableFlags flags = kTableFlags;
+    const float innerWidth = TableInnerWidth(nameWidth + timesWidth + padding, flags);
+    if (ImGui::BeginTable("Ranking", 2, flags, ImVec2(0.0f, 0.0f), innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Times Logged", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+        ImGui::TableSetupColumn("Times Logged", ImGuiTableColumnFlags_WidthFixed, timesWidth);
         PlainHeaderRow(2);
 
         int index = 0;
@@ -619,103 +771,101 @@ static void DrawMostLeastTab(const std::vector<BehaviorEntry> &entries,
                              const std::vector<BehaviorChoice> &choices,
                              TrendsReportOptions &options)
 {
+    // Side by side when there is room for both columns, otherwise stacked.
+    // Either way each column keeps enough height to be usable; if the window
+    // is shorter than that, the screen scrolls.
     const ImGuiStyle &style = ImGui::GetStyle();
-    const float spacing = style.ItemSpacing.x;
-    const float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float minHeight = RankingColumnMinHeight();
 
-    // Smallest useful column: both sort buttons side by side, and the title,
-    // sort buttons, table header and a few rows in view.
-    const float minColumnWidth =
-        SegmentedToggleWidth(2, kRankingToggleWidth) + 2.0f * style.WindowPadding.x;
-    const float minColumnHeight = 2.0f * style.WindowPadding.y + ImGui::GetFontSize() * 1.3f +
-                                  ImGui::GetFrameHeight() + 3.0f * style.ItemSpacing.y +
-                                  TableRowHeight() * 6.0f;
-
-    if (half >= minColumnWidth)
+    if (avail.x >= RankingColumnMinWidth(entries, choices) * 2.0f + style.ItemSpacing.x)
     {
-        // Side by side, filling the rest of the window (or scrolling the
-        // window when it is too short to show them properly)
-        const float height = UiLayout::FillHeightAtLeast(minColumnHeight);
-        DrawRankingColumn("GoodRanking", "Good Choices", true, half, height, entries, choices,
-                          options.goodOrder);
+        const float half = (avail.x - style.ItemSpacing.x) * 0.5f;
+        const float height = std::max(avail.y, minHeight);
+        DrawRankingColumn("GoodRanking", "Good Choices", true, ImVec2(half, height), entries,
+                          choices, options.goodOrder);
         ImGui::SameLine();
-        DrawRankingColumn("WrongRanking", "Wrong Choices", false, 0.0f, height, entries, choices,
-                          options.wrongOrder);
+        DrawRankingColumn("WrongRanking", "Wrong Choices", false, ImVec2(0.0f, height), entries,
+                          choices, options.wrongOrder);
     }
     else
     {
-        // Narrow window: one above the other, full width, sharing the height
-        float height = (ImGui::GetContentRegionAvail().y - style.ItemSpacing.y) * 0.5f;
-        if (height < minColumnHeight) height = minColumnHeight;
-        DrawRankingColumn("GoodRanking", "Good Choices", true, 0.0f, height, entries, choices,
-                          options.goodOrder);
-        DrawRankingColumn("WrongRanking", "Wrong Choices", false, 0.0f, height, entries, choices,
-                          options.wrongOrder);
+        const float height = std::max((avail.y - style.ItemSpacing.y) * 0.5f, minHeight);
+        DrawRankingColumn("GoodRanking", "Good Choices", true, ImVec2(0.0f, height), entries,
+                          choices, options.goodOrder);
+        DrawRankingColumn("WrongRanking", "Wrong Choices", false, ImVec2(0.0f, height), entries,
+                          choices, options.wrongOrder);
     }
 }
 
 static void DrawTimeOfDayTab(const std::vector<BehaviorEntry> &entries,
                              TrendsReportOptions &options)
 {
+    // "Show:" and "Sort:" share a row when there is room; otherwise "Sort:"
+    // moves to the next line. The buttons narrow a little to fit if needed.
+    const ImGuiStyle &style = ImGui::GetStyle();
+    const std::vector<ToggleOption<ChoiceKind>> kindOptions = {
+        {"All choices", ChoiceKind::All, "Show good and wrong choices together."},
+        {"Good only", ChoiceKind::Good, "Show only good choices."},
+        {"Wrong only", ChoiceKind::Wrong, "Show only wrong choices."}};
+    const std::vector<ToggleOption<TimeOfDaySort>> sortOptions = {
+        {"By time of day", TimeOfDaySort::ByHour,
+         "List the hours in order, 12am to 11pm, most logged first within each hour."},
+        {"By most logged", TimeOfDaySort::ByCount,
+         "List the most logged behavior and hour first, across the whole day. "
+         "Hours with nothing logged go last."}};
+    const float labelWidth = std::max(ImGui::CalcTextSize("Show:").x,
+                                      ImGui::CalcTextSize("Sort:").x) + style.ItemSpacing.x;
+    const float toggleRoom = ImGui::GetContentRegionAvail().x - labelWidth;
+    const float kindWidth = FitToggleWidth(kindOptions, 200.0f, toggleRoom);
+    const float sortWidth = FitToggleWidth(sortOptions, 260.0f, toggleRoom);
+
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Show:");
     ImGui::SameLine();
-    SegmentedToggle<ChoiceKind>(
-        "kind",
-        {{"All choices", ChoiceKind::All, "Show good and wrong choices together."},
-         {"Good only", ChoiceKind::Good, "Show only good choices."},
-         {"Wrong only", ChoiceKind::Wrong, "Show only wrong choices."}},
-        options.timeKind, 200.0f);
+    SegmentedToggle<ChoiceKind>("kind", kindOptions, options.timeKind, kindWidth);
 
-    // "Sort:" and its buttons move to the next row together in a narrow window
-    const float sortButtonWidth = 260.0f;
-    UiLayout::SameLineOrWrap(ImGui::CalcTextSize("Sort:").x + ImGui::GetStyle().ItemSpacing.x +
-                                 SegmentedToggleWidth(2, sortButtonWidth),
-                             50.0f);
+    ui::SameLineIfFits(labelWidth + ToggleGroupWidth(sortOptions.size(), sortWidth), 50.0f);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Sort:");
     ImGui::SameLine();
-    SegmentedToggle<TimeOfDaySort>(
-        "sort",
-        {{"By time of day", TimeOfDaySort::ByHour,
-          "List the hours in order, 12am to 11pm, most logged first within each hour."},
-         {"By most logged", TimeOfDaySort::ByCount,
-          "List the most logged behavior and hour first, across the whole day. "
-          "Hours with nothing logged go last."}},
-        options.timeSort, sortButtonWidth);
+    SegmentedToggle<TimeOfDaySort>("sort", sortOptions, options.timeSort, sortWidth);
 
-    UiLayout::PushTextWrapAtVisibleEdge(); // wrap at the window's edge in a narrow window
-    ImGui::TextColored(kMutedText, "Each row is one hour of the day, added up across every "
+    TextWrappedColored(kMutedText, "Each row is one hour of the day, added up across every "
                                    "included day.");
     if (options.timeKind == ChoiceKind::All)
     {
-        UiLayout::SameLineOrWrap(ImGui::CalcTextSize("Green = good choice.").x);
-        ImGui::TextColored(kGoodText, "Green = good choice.");
-        UiLayout::SameLineOrWrap(ImGui::CalcTextSize("Red = wrong choice.").x);
-        ImGui::TextColored(kWrongText, "Red = wrong choice.");
+        const char *goodNote = "Green = good choice.";
+        const char *wrongNote = "Red = wrong choice.";
+        ui::SameLineIfFits(ImGui::CalcTextSize(goodNote).x);
+        ImGui::TextColored(kGoodText, "%s", goodNote);
+        ui::SameLineIfFits(ImGui::CalcTextSize(wrongNote).x);
+        ImGui::TextColored(kWrongText, "%s", wrongNote);
     }
-    ImGui::PopTextWrapPos();
 
     const std::vector<HourRow> rows = TimeOfDayRows(entries, options.timeKind, options.timeSort);
     const std::string emptyText = EmptyHourLabel(options.timeKind);
 
-    // Sideways scrolling in a narrow window; a minimum height in a short one
-    // (the window scrolls instead of squashing the table)
-    float nameWidth = std::max(ImGui::CalcTextSize("Behavior").x,
-                               ImGui::CalcTextSize(emptyText.c_str()).x);
+    const float padding = style.CellPadding.x * 2.0f * 3.0f; // 3 columns
+    const float behaviorWidth = std::max(WidestName(rows, "Behavior"),
+                                         ImGui::CalcTextSize(emptyText.c_str()).x);
+    float widestHour = ImGui::CalcTextSize("Time").x;
     for (const HourRow &row : rows)
-        nameWidth = std::max(nameWidth, ImGui::CalcTextSize(row.name.c_str()).x);
-    ImGuiTableFlags tableFlags = kTableFlags;
-    const float innerWidth = ScrollXIfTooNarrow(tableFlags, 3, 220.0f + 210.0f, nameWidth);
-    const ImVec2 tableSize(0.0f, UiLayout::FillHeightAtLeast(TableRowHeight() * 10.0f +
-                                                             ImGui::GetStyle().ScrollbarSize));
-
-    if (ImGui::BeginTable("TimeOfDay", 3, tableFlags, tableSize, innerWidth))
+        widestHour = std::max(widestHour, ImGui::CalcTextSize(HourBlockLabel(row.hour).c_str()).x);
+    const float compactTimes = WidestTimesLabel(rows, "Times Logged");
+    const float timesWidth =
+        FixedColumnWidth(210.0f, compactTimes, behaviorWidth + 220.0f + padding);
+    const float timeWidth =
+        FixedColumnWidth(220.0f, widestHour, behaviorWidth + timesWidth + padding);
+    ImGuiTableFlags flags = kTableFlags;
+    const float innerWidth =
+        TableInnerWidth(timeWidth + behaviorWidth + timesWidth + padding, flags);
+    if (ImGui::BeginTable("TimeOfDay", 3, flags, ImVec2(0.0f, TableOuterHeight()), innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 220.0f);
+        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, timeWidth);
         ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Times Logged", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+        ImGui::TableSetupColumn("Times Logged", ImGuiTableColumnFlags_WidthFixed, timesWidth);
         PlainHeaderRow(3);
 
         // Sorted by hour: shade alternate hours so each hour reads as a group.
@@ -768,35 +918,32 @@ void DrawTrendsScreen(const BehaviorLog &log, const std::vector<BehaviorChoice> 
     const bool canShow = !options.filter.NoWeekdays();
 
     // ---- Title row: Back, title, and "Export PDF" at the top right ------------
-    // In a narrow window the subtitle moves under the title row, so the
-    // Export button can stay at the top right (or wraps too, if needed).
+    // On a narrow window the subtitle moves below the row (so "Export PDF"
+    // can stay at the top right), and if even that doesn't fit, the button
+    // drops to its own line.
     if (ImGui::Button("< Back", ImVec2(200, 55)))
         screen = g_trends.returnTo;
     Hint(g_trends.returnTo == Screen::History ? "Go back to the History calendar."
                                               : "Go back to the main screen.");
 
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.3f);
-    const float titleWidth = ImGui::CalcTextSize("Trends").x;
-    ImGui::PopFont();
-    UiLayout::SameLineOrWrap(titleWidth, 30.0f);
+    ImGui::SameLine(0.0f, 30.0f);
     ImGui::AlignTextToFramePadding();
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.3f);
     ImGui::TextUnformatted("Trends");
     ImGui::PopFont();
-
-    const char *subtitle = "  Spot patterns in logged behaviors";
-    const float itemSpacing = ImGui::GetStyle().ItemSpacing.x;
-    const bool subtitleOnTitleRow =
-        ImGui::GetItemRectMax().x + itemSpacing + ImGui::CalcTextSize(subtitle).x + itemSpacing +
-            kExportButtonSize.x <= UiLayout::RowRight();
-    if (subtitleOnTitleRow)
+    const char *subtitle = "Spot patterns in logged behaviors";
+    const float subtitleInlineWidth = ImGui::CalcTextSize("  ").x + ImGui::CalcTextSize(subtitle).x;
+    const bool subtitleInline =
+        ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x * 2.0f + subtitleInlineWidth +
+            kExportButtonSize.x <= ui::ContentRight();
+    if (subtitleInline)
     {
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", subtitle);
+        ImGui::TextDisabled("  %s", subtitle);
     }
 
-    UiLayout::SameLineRightAlignedOrWrap(kExportButtonSize.x);
+    ui::SameLineRightAligned(kExportButtonSize.x);
     ImGui::PushStyleColor(ImGuiCol_Button, kExportButton);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kExportButtonHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kExportButtonActive);
@@ -809,14 +956,14 @@ void DrawTrendsScreen(const BehaviorLog &log, const std::vector<BehaviorChoice> 
                  : "Check at least one day of the week before exporting.");
     ImGui::PopStyleColor(3);
 
-    DrawExportPopup();
-
-    if (!subtitleOnTitleRow)
+    if (!subtitleInline)
     {
-        UiLayout::PushTextWrapAtVisibleEdge();
-        ImGui::TextDisabled("Spot patterns in logged behaviors");
-        ImGui::PopTextWrapPos();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", subtitle);
+        ImGui::PopStyleColor();
     }
+
+    DrawExportPopup();
 
     ImGui::Separator();
 

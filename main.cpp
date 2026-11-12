@@ -3,6 +3,9 @@
 #include "imgui_impl_opengl3.h"
 
 #include <GLFW/glfw3.h>
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <iostream>
@@ -22,48 +25,19 @@
 static const char *CHOICES_FILE = "behavior_choices.txt";
 static const int MIN_POINTS = 1;
 static const int MAX_POINTS = 10;
-static const ImVec2 kBehaviorButtonSize(560, 65);
-static const float kAddChoiceButtonHeight = 48.0f;
-static const float kChoiceNameWidth = 560.0f;   // name box in the "New ... Choice" popup
-static const float kPopupButtonWidth = 270.0f;  // "Add" / "Cancel"
-
-// Good and Wrong Choices sit side by side when both columns fit, with this
-// gap between them. A column is "too narrow" when it is narrower than its
-// widest button label or than kMinChoiceColumnWidth; then they stack.
-static const float kChoiceColumnGap = 60.0f;
-static const float kMinChoiceColumnWidth = 320.0f;
-
-// Vertical divider drawn in the middle of that gap when the columns are side
-// by side: a rounded bar in the same muted blue-grey as the app's separators
-// and panel borders, but solid and thicker so it reads clearly.
-static const ImVec4 kChoiceColumnDivider(0.43f, 0.43f, 0.50f, 1.0f);
-static const float kChoiceColumnDividerWidth = 3.0f;
-
-// Each column's behavior buttons are in their own scroll area, so a long list
-// of Good Choices never pushes Wrong Choices off the screen. The area is as
-// tall as its buttons until the window runs out of room, then it scrolls.
-// It always shows at least this many buttons (the screen scrolls if needed).
-static const float kMinVisibleChoiceButtons = 1.5f;
-
-// Set when a choice is added, so its list scrolls down to show it.
-// Index 0 = Good Choices, 1 = Wrong Choices.
-static bool g_scrollToNewChoice[2] = {false, false};
-
-static const char *addChoiceLabel(bool isGood)
-{
-    return isGood ? "+  CREATE A GOOD CHOICE" : "+  CREATE A WRONG CHOICE";
-}
-
-// Width for the big buttons on the main screen: their normal width when the
-// column is wide enough, narrower when it isn't, but never so narrow that the
-// label is cut off (the window scrolls sideways instead).
-static float mainButtonWidth(const char *label, float columnWidth)
-{
-    float width = columnWidth;
-    if (width > kBehaviorButtonSize.x) width = kBehaviorButtonSize.x;
-    const float labelWidth = UiLayout::ButtonLabelWidth(label);
-    return (width < labelWidth) ? labelWidth : width;
-}
+static const float kBehaviorButtonHeight = 65.0f; // width follows the pane
+static const float kCreateButtonHeight = 48.0f;
+static const ImVec2 kChoicePanePadding(18, 18);
+// The panes go side by side once each can be this wide (or narrower, if the
+// labels are short). A longer label wraps onto a second line in its button
+// instead of forcing the panes to stack.
+static const float kChoicePaneSideBySideWidth = 420.0f;
+static const char *kCreateGoodLabel = "+  CREATE A GOOD CHOICE";
+static const char *kCreateWrongLabel = "+  CREATE A WRONG CHOICE";
+// Smallest window the layout is designed for (well under half of a 1366x768
+// screen). Below this, panes would be too small to use.
+static const int kMinWindowWidth = 640;
+static const int kMinWindowHeight = 400;
 
 static int clampPoints(int points, bool isGood)
 {
@@ -148,21 +122,102 @@ static void saveChoices(const std::vector<BehaviorChoice> &choices)
     }
 }
 
+// Splits 'label' into lines no wider than 'wrapWidth', breaking between words
+// (or inside a word that is too long to fit on a line by itself).
+static std::vector<std::string> wrapLabel(const std::string &label, float wrapWidth)
+{
+    std::vector<std::string> lines;
+    ImFont *font = ImGui::GetFont();
+    const float fontSize = ImGui::GetFontSize();
+    const char *text = label.c_str();
+    const char *end = text + label.size();
+
+    while (text < end)
+    {
+        const char *lineEnd = font->CalcWordWrapPosition(fontSize, text, end, wrapWidth);
+        if (lineEnd <= text) lineEnd = text + 1; // always make progress
+
+        const char *trimmedEnd = lineEnd;
+        while (trimmedEnd > text && trimmedEnd[-1] == ' ') --trimmedEnd;
+        lines.emplace_back(text, trimmedEnd);
+
+        text = lineEnd;
+        while (text < end && *text == ' ') ++text;
+    }
+    return lines;
+}
+
+// Height of a behavior button: the usual height, or taller when its label
+// wraps onto more lines than fit.
+static float choiceButtonHeight(size_t lineCount)
+{
+    const float textHeight = ImGui::GetTextLineHeight() * static_cast<float>(lineCount);
+    return std::max(kBehaviorButtonHeight,
+                    textHeight + ImGui::GetStyle().FramePadding.y * 2.0f);
+}
+
+// Lines of a behavior button's label when the button is 'buttonWidth' wide.
+static std::vector<std::string> choiceButtonLines(const BehaviorChoice &choice,
+                                                  float buttonWidth)
+{
+    return wrapLabel(makeChoiceLabel(choice),
+                     buttonWidth - ImGui::GetStyle().FramePadding.x * 2.0f);
+}
+
+// Total height of the buttons for one kind of choice, with spacing between.
+static float choiceListContentHeight(const std::vector<BehaviorChoice> &choices,
+                                     bool isGood, float buttonWidth)
+{
+    float height = 0.0f;
+    int count = 0;
+    for (const BehaviorChoice &choice : choices)
+    {
+        if (choice.isGood != isGood) continue;
+        height += choiceButtonHeight(choiceButtonLines(choice, buttonWidth).size());
+        ++count;
+    }
+    if (count > 1)
+        height += ImGui::GetStyle().ItemSpacing.y * static_cast<float>(count - 1);
+    return height;
+}
+
+// Every button is exactly 'buttonWidth' wide (the same in both panes). A label
+// too long for one line wraps onto a second line (the button grows taller if
+// it needs more), so labels are never cut off and the list never has to
+// scroll sideways.
 static void drawChoiceButtons(BehaviorLog &log,
                               const std::vector<BehaviorChoice> &choices,
-                              bool isGood, float columnWidth)
+                              bool isGood, float buttonWidth)
 {
+    const float lineHeight = ImGui::GetTextLineHeight();
+    const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+
     for (size_t i = 0; i < choices.size(); ++i)
     {
         const BehaviorChoice &choice = choices[i];
         if (choice.isGood != isGood) continue;
 
+        const std::vector<std::string> lines = choiceButtonLines(choice, buttonWidth);
+        const float buttonHeight = choiceButtonHeight(lines.size());
+
         ImGui::PushID(static_cast<int>(i));
-        const std::string label = makeChoiceLabel(choice);
-        const ImVec2 size(mainButtonWidth(label.c_str(), columnWidth), kBehaviorButtonSize.y);
-        if (ImGui::Button(label.c_str(), size))
+        if (ImGui::Button("##choice", ImVec2(buttonWidth, buttonHeight)))
             log.record(choice.name, choice.points);
         ImGui::PopID();
+
+        // The label, each line centered, the block centered vertically
+        // (the same placement ImGui uses for a one-line button label).
+        const ImVec2 buttonMin = ImGui::GetItemRectMin();
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        float y = buttonMin.y +
+                  (buttonHeight - lineHeight * static_cast<float>(lines.size())) * 0.5f;
+        for (const std::string &line : lines)
+        {
+            const float lineWidth = ImGui::CalcTextSize(line.c_str()).x;
+            draw->AddText(ImVec2(buttonMin.x + (buttonWidth - lineWidth) * 0.5f, y),
+                          textColor, line.c_str());
+            y += lineHeight;
+        }
     }
 }
 
@@ -201,13 +256,10 @@ static void drawPointsStepper(int &points, bool isGood)
 }
 
 static void drawAddChoiceButton(bool isGood,
-                               std::vector<BehaviorChoice> &choices,
-                               float columnWidth)
+                               std::vector<BehaviorChoice> &choices)
 {
-    // These are management controls, not behavior buttons. Give them a
-    // smaller, outlined, neutral look so they stand apart from the large
-    // green/red buttons that record behavior.
-    const char *buttonLabel = addChoiceLabel(isGood);
+    // Uses the app's standard blue button colours, like History and Trends.
+    const char *buttonLabel = isGood ? kCreateGoodLabel : kCreateWrongLabel;
     const char *popupTitle = isGood ? "New Good Choice" : "New Wrong Choice";
 
     static char nameInput[2][128] = {};
@@ -215,45 +267,27 @@ static void drawAddChoiceButton(bool isGood,
     char *name = nameInput[isGood ? 0 : 1];
     int &points = pointsInput[isGood ? 0 : 1];
 
-    ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.15f, 0.23f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.34f, 0.48f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.17f, 0.27f, 0.39f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.42f, 0.65f, 0.78f, 1.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-
-    if (ImGui::Button(buttonLabel,
-                      ImVec2(mainButtonWidth(buttonLabel, columnWidth), kAddChoiceButtonHeight)))
+    // Fills the width of its pane, which follows the window size.
+    if (ImGui::Button(buttonLabel, ImVec2(-FLT_MIN, kCreateButtonHeight)))
     {
         name[0] = '\0';
         points = defaultPoints(isGood);
         ImGui::OpenPopup(popupTitle);
     }
 
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor(4);
-
-    // Keep the popup inside the app window, even a small one: centre it again
-    // if the window is resized while it is open, narrow its contents to fit,
-    // and let it scroll if the window is too short to show all of it.
-    static ImVec2 lastDisplaySize[2] = {};
-    const ImGuiViewport *viewport = ImGui::GetMainViewport();
-    const ImGuiStyle &style = ImGui::GetStyle();
-    float contentWidth = viewport->WorkSize.x - style.WindowPadding.x * 2.0f -
-                         style.ScrollbarSize - 2.0f * style.ItemSpacing.x;
-    if (contentWidth > kChoiceNameWidth) contentWidth = kChoiceNameWidth;
-    if (contentWidth < 200.0f) contentWidth = 200.0f;
-    float popupButtonWidth = (contentWidth - style.ItemSpacing.x) * 0.5f;
-    if (popupButtonWidth > kPopupButtonWidth) popupButtonWidth = kPopupButtonWidth;
-
-    ImGui::SetNextWindowPos(viewport->GetCenter(),
-                            UiLayout::CenterCondition(lastDisplaySize[isGood ? 0 : 1]),
-                            ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), viewport->WorkSize);
+    ui::CenterNextPopup();
 
     if (ImGui::BeginPopupModal(popupTitle, nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
+        // 560 wide normally; narrower when the app window is too small for
+        // that, so the popup always fits on screen.
+        const ImGuiStyle &style = ImGui::GetStyle();
+        const float contentWidth =
+            ui::FitPopupWidth(560.0f + style.WindowPadding.x * 2.0f, 320.0f) -
+            style.WindowPadding.x * 2.0f;
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + contentWidth);
+
         ImGui::Text("Choice name:");
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(contentWidth);
@@ -263,84 +297,111 @@ static void drawAddChoiceButton(bool isGood,
 
         ImGui::Text(isGood ? "Points to add:" : "Points to subtract:");
         drawPointsStepper(points, isGood);
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + contentWidth);
-        ImGui::TextDisabled(
+        ImGui::PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]);
+        ImGui::TextWrapped("%s",
             isGood ? "+ rewards more, - rewards less (+1 to +10)"
                    : "+ penalises more, - penalises less (-1 to -10)");
-        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
 
         std::string trimmedName = name;
-        const size_t first = trimmedName.find_first_not_of(" \\t");
-        const size_t last = trimmedName.find_last_not_of(" \\t");
+        // Trim spaces and tabs. (This must be "\t", a tab: the old "\\t"
+        // also stripped the letter 't', turning "pestering cat" into "pestering ca".)
+        const size_t first = trimmedName.find_first_not_of(" \t");
+        const size_t last = trimmedName.find_last_not_of(" \t");
         trimmedName = (first == std::string::npos)
             ? "" : trimmedName.substr(first, last - first + 1);
         const bool canAdd = !trimmedName.empty();
 
         ImGui::Spacing();
         ImGui::BeginDisabled(!canAdd);
-        const bool addClicked = ImGui::Button("Add", ImVec2(popupButtonWidth, 0));
+        const float actionWidth = (contentWidth - style.ItemSpacing.x) * 0.5f;
+        const bool addClicked = ImGui::Button("Add", ImVec2(actionWidth, 0));
         ImGui::EndDisabled();
 
         if (canAdd && addClicked)
         {
             choices.push_back({trimmedName, clampPoints(points, isGood), isGood});
             saveChoices(choices);
-            g_scrollToNewChoice[isGood ? 0 : 1] = true;
             ImGui::CloseCurrentPopup();
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(popupButtonWidth, 0)) ||
+        if (ImGui::Button("Cancel", ImVec2(actionWidth, 0)) ||
             (!ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)))
             ImGui::CloseCurrentPopup();
 
+        ImGui::PopTextWrapPos();
         ImGui::EndPopup();
     }
 }
 
-// Width the widest button on the main screen needs to show its whole label.
-static float widestChoiceButton(const std::vector<BehaviorChoice> &choices)
+// Width a pane needs to show all of its button labels on one line.
+static float choicePaneMinWidth(const std::vector<BehaviorChoice> &choices,
+                                bool isGood)
 {
-    float widest = UiLayout::ButtonLabelWidth(addChoiceLabel(true));
-    const float wrongAdd = UiLayout::ButtonLabelWidth(addChoiceLabel(false));
-    if (wrongAdd > widest) widest = wrongAdd;
+    float widest = ui::ButtonWidthFor(isGood ? kCreateGoodLabel : kCreateWrongLabel);
     for (const BehaviorChoice &choice : choices)
-    {
-        const float width = UiLayout::ButtonLabelWidth(makeChoiceLabel(choice).c_str());
-        if (width > widest) widest = width;
-    }
-    return widest;
+        if (choice.isGood == isGood)
+            widest = std::max(widest, ui::ButtonWidthFor(makeChoiceLabel(choice).c_str()));
+    return widest + kChoicePanePadding.x * 2.0f + ImGui::GetStyle().ScrollbarSize;
 }
 
-// Height of a column's behavior buttons when none are scrolled out of view
-// (0 when it has none).
-static float choiceListHeight(const std::vector<BehaviorChoice> &choices, bool isGood)
+// Smallest pane height that still shows the title, two behavior buttons and
+// the "create" button.
+static float choicePaneMinHeight()
 {
-    int count = 0;
-    for (const BehaviorChoice &choice : choices)
-        if (choice.isGood == isGood) ++count;
-    if (count == 0) return 0.0f;
-    return static_cast<float>(count) * kBehaviorButtonSize.y +
-           static_cast<float>(count - 1) * ImGui::GetStyle().ItemSpacing.y;
+    const ImGuiStyle &style = ImGui::GetStyle();
+    return kChoicePanePadding.y * 2.0f + ImGui::GetTextLineHeight() +
+           kBehaviorButtonHeight * 2.0f + kCreateButtonHeight +
+           style.ItemSpacing.y * 3.0f;
 }
 
-// Smallest height a column's scroll area gets (unless it needs less).
-static float minChoiceListHeight()
+// Height of the scrolling list in a pane 'paneHeight' tall: everything below
+// the title and above the "create" button.
+static float choiceListHeight(float paneHeight)
 {
-    return kMinVisibleChoiceButtons * (kBehaviorButtonSize.y + ImGui::GetStyle().ItemSpacing.y);
+    const ImGuiStyle &style = ImGui::GetStyle();
+    return std::max(paneHeight - kChoicePanePadding.y * 2.0f -
+                        ImGui::GetTextLineHeight() - style.ItemSpacing.y -
+                        kCreateButtonHeight - style.ItemSpacing.y,
+                    kBehaviorButtonHeight);
 }
 
-// "Good Choices" or "Wrong Choices": title, behavior buttons (green/red) in
-// their own scroll area at most maxListHeight tall, and the
-// "+ CREATE A ... CHOICE" button, which stays visible below the list.
-// Everything is at most columnWidth wide.
-static void drawChoiceColumn(BehaviorLog &log, std::vector<BehaviorChoice> &choices,
-                             bool isGood, float columnWidth, bool spacingAfterTitle,
-                             float maxListHeight)
+// True if either list (good or wrong) in panes of 'paneSize' has more buttons
+// than fit, so it needs a vertical scrollbar. Both panes then leave room for
+// a scrollbar, which keeps their buttons exactly the same width.
+static bool choiceListsNeedScrollbar(const std::vector<BehaviorChoice> &choices,
+                                     const ImVec2 &paneSize)
 {
-    ImGui::Text(isGood ? "Good Choices" : "Wrong Choices");
-    if (spacingAfterTitle)
-        ImGui::Spacing();
+    const float buttonWidth = paneSize.x - kChoicePanePadding.x * 2.0f -
+                              ImGui::GetStyle().ScrollbarSize;
+    const float listHeight = choiceListHeight(paneSize.y);
+    return choiceListContentHeight(choices, true, buttonWidth) > listHeight ||
+           choiceListContentHeight(choices, false, buttonWidth) > listHeight;
+}
+
+// One bordered pane: the title, the behavior buttons in their own scroll view,
+// and the "create" button pinned underneath so it is always reachable.
+static void drawChoicePane(const char *id, const char *title, bool isGood,
+                           const ImVec2 &size, bool reserveScrollbar,
+                           BehaviorLog &log, std::vector<BehaviorChoice> &choices)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, kChoicePanePadding);
+    // The contents are always submitted (even when the pane is scrolled out
+    // of view) so the pane's "New ... Choice" popup keeps working.
+    ImGui::BeginChild(id, size, ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+
+    ImGui::TextUnformatted(title);
+
+    // The list fills the pane above the "create" button and scrolls when
+    // there are more buttons than fit. (Long labels wrap, so it never needs
+    // to scroll sideways.)
+    const float buttonWidth = std::floor(
+        ImGui::GetContentRegionAvail().x -
+        (reserveScrollbar ? ImGui::GetStyle().ScrollbarSize : 0.0f));
+    ImGui::BeginChild("List", ImVec2(0.0f, choiceListHeight(size.y)));
 
     if (isGood)
     {
@@ -357,38 +418,68 @@ static void drawChoiceColumn(BehaviorLog &log, std::vector<BehaviorChoice> &choi
             ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.30f, 0.30f, 1.0f));
     }
 
-    const float listHeight = choiceListHeight(choices, isGood);
-    if (listHeight > 0.0f)
-    {
-        // Room for the buttons plus a scrollbar beside them (it only shows
-        // when the list is taller than the space for it); never so narrow
-        // that a label is cut off.
-        const ImGuiStyle &style = ImGui::GetStyle();
-        float listWidth = kBehaviorButtonSize.x + style.ScrollbarSize;
-        if (listWidth > columnWidth) listWidth = columnWidth;
-        const float widest = widestChoiceButton(choices) + style.ScrollbarSize;
-        if (listWidth < widest) listWidth = widest;
+    drawChoiceButtons(log, choices, isGood, buttonWidth);
 
-        const float height = (listHeight < maxListHeight) ? listHeight : maxListHeight;
-        ImGui::BeginChild(isGood ? "GoodChoiceList" : "WrongChoiceList",
-                          ImVec2(listWidth, height));
-        // Buttons fill the list's width (minus its scrollbar when shown),
-        // up to their normal width
-        drawChoiceButtons(log, choices, isGood, ImGui::GetContentRegionAvail().x);
-        bool &scrollToNew = g_scrollToNewChoice[isGood ? 0 : 1];
-        if (scrollToNew)
-        {
-            ImGui::SetScrollHereY(1.0f); // show the choice that was just added
-            scrollToNew = false;
-        }
-        ImGui::EndChild();
+    // Popped before the "create" button and its popup, so the popup's
+    // buttons keep the app's standard blue instead of turning green/red.
+    ImGui::PopStyleColor(2);
+    ImGui::EndChild();
+
+    drawAddChoiceButton(isGood, choices);
+
+    ImGui::EndChild();
+}
+
+static void drawMainScreen(BehaviorLog &log,
+                           std::vector<BehaviorChoice> &choices,
+                           Screen &screen)
+{
+    const ImGuiStyle &style = ImGui::GetStyle();
+    const ImVec2 navButtonSize(200, 55);
+
+    ImGui::TextWrapped("Welcome to the Behavior Tracker!");
+    ImGui::Text("Current Points: %d", log.currentPoints());
+
+    // History and Trends sit on the same row as the points display, or
+    // together on the next row when the window is too narrow for that.
+    ui::SameLineIfFits(navButtonSize.x * 2.0f + style.ItemSpacing.x, 60.0f);
+    if (ImGui::Button("History", navButtonSize))
+    {
+        screen = Screen::History;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Trends", navButtonSize))
+    {
+        OpenTrendsScreen(screen);
     }
 
-    ImGui::PopStyleColor(2);
+    ImGui::Separator();
 
-    // Drawn after popping the green/red, so the "New ... Choice" popup uses
-    // the standard (blue) button colour.
-    drawAddChoiceButton(isGood, choices, columnWidth);
+    // Good and wrong choices each get their own scrolling pane: side by side
+    // when the window is wide enough for both, otherwise stacked.
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float paneMinWidth = std::min(
+        kChoicePaneSideBySideWidth,
+        std::max(choicePaneMinWidth(choices, true), choicePaneMinWidth(choices, false)));
+    const float paneMinHeight = choicePaneMinHeight();
+    const bool sideBySide = avail.x >= paneMinWidth * 2.0f + style.ItemSpacing.x;
+
+    // Both panes are always exactly the same size.
+    const ImVec2 paneSize =
+        sideBySide
+            ? ImVec2(std::floor((avail.x - style.ItemSpacing.x) * 0.5f),
+                     std::max(avail.y, paneMinHeight))
+            : ImVec2(std::floor(avail.x),
+                     std::max(std::floor((avail.y - style.ItemSpacing.y) * 0.5f),
+                              paneMinHeight));
+    const bool reserveScrollbar = choiceListsNeedScrollbar(choices, paneSize);
+
+    drawChoicePane("GoodChoices", "Good Choices", true, paneSize, reserveScrollbar,
+                   log, choices);
+    if (sideBySide)
+        ImGui::SameLine();
+    drawChoicePane("WrongChoices", "Wrong Choices", false, paneSize, reserveScrollbar,
+                   log, choices);
 }
 
 int main()
@@ -404,7 +495,6 @@ int main()
     saveChoices(choices);
 
     Screen screen = Screen::Main;
-    Screen shownScreen = screen; // screen drawn last frame
     std::string selectedDate; // day shown on the DayDetail screen
 
     // When the clock passes midnight, re-save so the oldest day is pruned
@@ -431,6 +521,10 @@ int main()
         glfwTerminate();
         return 1;
     }
+
+    // Don't let the window shrink below what the layout can handle.
+    glfwSetWindowSizeLimits(window, kMinWindowWidth, kMinWindowHeight,
+                            GLFW_DONT_CARE, GLFW_DONT_CARE);
 
     // Set the window as the current OpenGL context
     glfwMakeContextCurrent(window);
@@ -522,22 +616,13 @@ int main()
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
 
-        // Each screen opens at the top, even if the previous one was
-        // scrolled (screens can scroll when the window is small).
-        if (screen != shownScreen)
-        {
-            ImGui::SetNextWindowScroll(ImVec2(0.0f, 0.0f));
-            shownScreen = screen;
-        }
-
         ImGui::Begin(
             "Behavior Tracker",
             nullptr,
             ImGuiWindowFlags_NoTitleBar |
                 ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove |
-                ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_HorizontalScrollbar); // when the window is too narrow
+                ImGuiWindowFlags_NoCollapse);
 
         if (screen == Screen::History)
         {
@@ -553,126 +638,7 @@ int main()
         }
         else
         {
-            ImGui::Text("Welcome to the Behavior Tracker!");
-            ImGui::Text("Current Points: %d", log.currentPoints());
-
-            // History button sits on the same row as the points display
-            // (the buttons move to the next row if the window is too narrow).
-            // Decided as if the vertical scrollbar were showing, so whether
-            // the row wraps can't depend on (and flip) the scrollbar.
-            const float headerRight = UiLayout::RowRight() -
-                ((ImGui::GetScrollMaxY() > 0.0f) ? 0.0f : style.ScrollbarSize);
-            UiLayout::SameLineOrWrap(200.0f, 60.0f, -1.0f, headerRight);
-            if (ImGui::Button("History", ImVec2(200, 55)))
-            {
-                screen = Screen::History;
-            }
-            UiLayout::SameLineOrWrap(200.0f, -1.0f, -1.0f, headerRight);
-            if (ImGui::Button("Trends", ImVec2(200, 55)))
-            {
-                OpenTrendsScreen(screen);
-            }
-
-            ImGui::Separator();
-
-            // Good Choices and Wrong Choices side by side when both columns
-            // fit; one above the other when the window is too narrow.
-            // The decision is made as if the vertical scrollbar were showing,
-            // so switching layouts (which can add or remove the scrollbar)
-            // can't make it flip back and forth.
-            const float availableWidth = ImGui::GetContentRegionAvail().x;
-            const float layoutWidth = availableWidth -
-                ((ImGui::GetScrollMaxY() > 0.0f) ? 0.0f : style.ScrollbarSize);
-            // (room for the widest label plus the list's scrollbar)
-            float minColumnWidth = widestChoiceButton(choices) + style.ScrollbarSize;
-            if (minColumnWidth < kMinChoiceColumnWidth) minColumnWidth = kMinChoiceColumnWidth;
-            const bool sideBySide =
-                (layoutWidth - kChoiceColumnGap) * 0.5f >= minColumnWidth;
-
-            // Height available for the two lists of behavior buttons: the
-            // rest of the window, minus everything else in the column(s):
-            // titles, spacing, "+ CREATE" buttons and separators.
-            const float spacingY = style.ItemSpacing.y;
-            const float titleHeight = ImGui::GetTextLineHeight();
-            const float availableHeight = ImGui::GetContentRegionAvail().y;
-            const float minListHeight = minChoiceListHeight();
-            const float goodListHeight = choiceListHeight(choices, true);
-            const float wrongListHeight = choiceListHeight(choices, false);
-
-            if (sideBySide)
-            {
-                float columnWidth = (availableWidth - kChoiceColumnGap) * 0.5f;
-                const float listColumnWidth = columnWidth; // the list's scrollbar may use the gap
-                if (columnWidth > kBehaviorButtonSize.x) columnWidth = kBehaviorButtonSize.x;
-                const ImVec2 start = ImGui::GetCursorPos();
-                const ImVec2 startOnScreen = ImGui::GetCursorScreenPos();
-
-                // Each column: title, spacing, list, spacing x2, "+ CREATE",
-                // then the separator below both columns.
-                float maxListHeight = availableHeight -
-                    (titleHeight + 5.0f * spacingY + kAddChoiceButtonHeight + 2.0f);
-                if (maxListHeight < minListHeight) maxListHeight = minListHeight;
-
-                ImGui::BeginGroup();
-                drawChoiceColumn(log, choices, true, listColumnWidth, true, maxListHeight);
-                ImGui::EndGroup();
-                const float goodBottom = ImGui::GetCursorPosY();
-                float columnsBottomOnScreen = ImGui::GetItemRectMax().y;
-
-                // Second column starts level with the first (SetCursorPos
-                // rather than SameLine, so both titles line up exactly)
-                ImGui::SetCursorPos(ImVec2(start.x + columnWidth + kChoiceColumnGap, start.y));
-                ImGui::BeginGroup();
-                drawChoiceColumn(log, choices, false, listColumnWidth, true, maxListHeight);
-                ImGui::EndGroup();
-
-                if (ImGui::GetItemRectMax().y > columnsBottomOnScreen)
-                    columnsBottomOnScreen = ImGui::GetItemRectMax().y;
-
-                // Divider between the columns, from the titles down to the
-                // bottom of the longer column
-                const float dividerX =
-                    startOnScreen.x + columnWidth + kChoiceColumnGap * 0.5f;
-                const float halfWidth = kChoiceColumnDividerWidth * 0.5f;
-                ImGui::GetWindowDrawList()->AddRectFilled(
-                    ImVec2(dividerX - halfWidth, startOnScreen.y),
-                    ImVec2(dividerX + halfWidth, columnsBottomOnScreen),
-                    ImGui::GetColorU32(kChoiceColumnDivider), halfWidth);
-
-                // Continue below whichever column is longer
-                if (ImGui::GetCursorPosY() < goodBottom)
-                    ImGui::SetCursorPosY(goodBottom);
-            }
-            else
-            {
-                // Stacked: the two lists share the height. Each gets half,
-                // but a list that needs less than half gives the rest to the
-                // other one.
-                const float budget = availableHeight -
-                    (2.0f * titleHeight + 11.0f * spacingY + 2.0f * kAddChoiceButtonHeight + 4.0f);
-                float goodMax = goodListHeight;
-                float wrongMax = wrongListHeight;
-                if (goodListHeight + wrongListHeight > budget)
-                {
-                    const float half = budget * 0.5f;
-                    if (goodListHeight <= half)
-                        wrongMax = budget - goodListHeight;
-                    else if (wrongListHeight <= half)
-                        goodMax = budget - wrongListHeight;
-                    else
-                        goodMax = wrongMax = half;
-                }
-                if (goodMax < minListHeight) goodMax = minListHeight;
-                if (wrongMax < minListHeight) wrongMax = minListHeight;
-
-                drawChoiceColumn(log, choices, true, availableWidth, true, goodMax);
-
-                ImGui::Spacing();
-                ImGui::Separator();
-
-                drawChoiceColumn(log, choices, false, availableWidth, false, wrongMax);
-            }
-            ImGui::Separator();
+            drawMainScreen(log, choices, screen);
         }
 
         ImGui::End();
