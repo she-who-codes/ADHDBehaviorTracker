@@ -4,8 +4,24 @@ GOOD|5|Completed Schoolwork
 WRONG|3|Negative Behavior
 WRONG|5|Incomplete Schoolwork
 GOOD|5|Cleaned up toys
-WRONG|7|Lying
-GOOD|1|Helped with projec
+GOOD|1|Helped with project
 GOOD|3|Sharing toys
+GOOD|1|Brushed Teeth Without Issues
+GOOD|1|Helping Mom
+GOOD|1|Helping Dad
+GOOD|3|Cleaning Up On Time
+GOOD|3|Transitioning With Out Issues
+GOOD|5|Completed Bedtime Routing With Out Asking
+GOOD|7|Completing a Chore With Out Asking
+GOOD|1|Being Kind to Others
+GOOD|1|Acting Selfless
+GOOD|1|Not Arguing
+GOOD|3|Listening the First Time
+WRONG|7|Lying
+WRONG|4|Disrupting Everyone's Sleep
+WRONG|3|Pestering On Purpose
+WRONG|3|Being Mean
+WRONG|1|Ignoring an Adult
+WRONG|4|Pestering the cat
 WRONG|4|Being Deceitful
 WRONG|5|Being Destructive

@@ -27,12 +27,39 @@ static const float kAddChoiceButtonHeight = 48.0f;
 static const float kChoiceNameWidth = 560.0f;   // name box in the "New ... Choice" popup
 static const float kPopupButtonWidth = 270.0f;  // "Add" / "Cancel"
 
-// Width for the big full-row buttons on the main screen: their normal width
-// when the window is wide enough, narrower when it isn't, but never so narrow
-// that the label is cut off (the window scrolls sideways instead).
-static float mainButtonWidth(const char *label)
+// Good and Wrong Choices sit side by side when both columns fit, with this
+// gap between them. A column is "too narrow" when it is narrower than its
+// widest button label or than kMinChoiceColumnWidth; then they stack.
+static const float kChoiceColumnGap = 60.0f;
+static const float kMinChoiceColumnWidth = 320.0f;
+
+// Vertical divider drawn in the middle of that gap when the columns are side
+// by side: a rounded bar in the same muted blue-grey as the app's separators
+// and panel borders, but solid and thicker so it reads clearly.
+static const ImVec4 kChoiceColumnDivider(0.43f, 0.43f, 0.50f, 1.0f);
+static const float kChoiceColumnDividerWidth = 3.0f;
+
+// Each column's behavior buttons are in their own scroll area, so a long list
+// of Good Choices never pushes Wrong Choices off the screen. The area is as
+// tall as its buttons until the window runs out of room, then it scrolls.
+// It always shows at least this many buttons (the screen scrolls if needed).
+static const float kMinVisibleChoiceButtons = 1.5f;
+
+// Set when a choice is added, so its list scrolls down to show it.
+// Index 0 = Good Choices, 1 = Wrong Choices.
+static bool g_scrollToNewChoice[2] = {false, false};
+
+static const char *addChoiceLabel(bool isGood)
 {
-    float width = ImGui::GetContentRegionAvail().x;
+    return isGood ? "+  CREATE A GOOD CHOICE" : "+  CREATE A WRONG CHOICE";
+}
+
+// Width for the big buttons on the main screen: their normal width when the
+// column is wide enough, narrower when it isn't, but never so narrow that the
+// label is cut off (the window scrolls sideways instead).
+static float mainButtonWidth(const char *label, float columnWidth)
+{
+    float width = columnWidth;
     if (width > kBehaviorButtonSize.x) width = kBehaviorButtonSize.x;
     const float labelWidth = UiLayout::ButtonLabelWidth(label);
     return (width < labelWidth) ? labelWidth : width;
@@ -123,7 +150,7 @@ static void saveChoices(const std::vector<BehaviorChoice> &choices)
 
 static void drawChoiceButtons(BehaviorLog &log,
                               const std::vector<BehaviorChoice> &choices,
-                              bool isGood)
+                              bool isGood, float columnWidth)
 {
     for (size_t i = 0; i < choices.size(); ++i)
     {
@@ -132,7 +159,7 @@ static void drawChoiceButtons(BehaviorLog &log,
 
         ImGui::PushID(static_cast<int>(i));
         const std::string label = makeChoiceLabel(choice);
-        const ImVec2 size(mainButtonWidth(label.c_str()), kBehaviorButtonSize.y);
+        const ImVec2 size(mainButtonWidth(label.c_str(), columnWidth), kBehaviorButtonSize.y);
         if (ImGui::Button(label.c_str(), size))
             log.record(choice.name, choice.points);
         ImGui::PopID();
@@ -174,14 +201,13 @@ static void drawPointsStepper(int &points, bool isGood)
 }
 
 static void drawAddChoiceButton(bool isGood,
-                               std::vector<BehaviorChoice> &choices)
+                               std::vector<BehaviorChoice> &choices,
+                               float columnWidth)
 {
     // These are management controls, not behavior buttons. Give them a
     // smaller, outlined, neutral look so they stand apart from the large
     // green/red buttons that record behavior.
-    const char *buttonLabel = isGood
-        ? "+  CREATE A GOOD CHOICE"
-        : "+  CREATE A WRONG CHOICE";
+    const char *buttonLabel = addChoiceLabel(isGood);
     const char *popupTitle = isGood ? "New Good Choice" : "New Wrong Choice";
 
     static char nameInput[2][128] = {};
@@ -196,7 +222,8 @@ static void drawAddChoiceButton(bool isGood,
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.42f, 0.65f, 0.78f, 1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
 
-    if (ImGui::Button(buttonLabel, ImVec2(mainButtonWidth(buttonLabel), kAddChoiceButtonHeight)))
+    if (ImGui::Button(buttonLabel,
+                      ImVec2(mainButtonWidth(buttonLabel, columnWidth), kAddChoiceButtonHeight)))
     {
         name[0] = '\0';
         points = defaultPoints(isGood);
@@ -258,6 +285,7 @@ static void drawAddChoiceButton(bool isGood,
         {
             choices.push_back({trimmedName, clampPoints(points, isGood), isGood});
             saveChoices(choices);
+            g_scrollToNewChoice[isGood ? 0 : 1] = true;
             ImGui::CloseCurrentPopup();
         }
 
@@ -268,6 +296,99 @@ static void drawAddChoiceButton(bool isGood,
 
         ImGui::EndPopup();
     }
+}
+
+// Width the widest button on the main screen needs to show its whole label.
+static float widestChoiceButton(const std::vector<BehaviorChoice> &choices)
+{
+    float widest = UiLayout::ButtonLabelWidth(addChoiceLabel(true));
+    const float wrongAdd = UiLayout::ButtonLabelWidth(addChoiceLabel(false));
+    if (wrongAdd > widest) widest = wrongAdd;
+    for (const BehaviorChoice &choice : choices)
+    {
+        const float width = UiLayout::ButtonLabelWidth(makeChoiceLabel(choice).c_str());
+        if (width > widest) widest = width;
+    }
+    return widest;
+}
+
+// Height of a column's behavior buttons when none are scrolled out of view
+// (0 when it has none).
+static float choiceListHeight(const std::vector<BehaviorChoice> &choices, bool isGood)
+{
+    int count = 0;
+    for (const BehaviorChoice &choice : choices)
+        if (choice.isGood == isGood) ++count;
+    if (count == 0) return 0.0f;
+    return static_cast<float>(count) * kBehaviorButtonSize.y +
+           static_cast<float>(count - 1) * ImGui::GetStyle().ItemSpacing.y;
+}
+
+// Smallest height a column's scroll area gets (unless it needs less).
+static float minChoiceListHeight()
+{
+    return kMinVisibleChoiceButtons * (kBehaviorButtonSize.y + ImGui::GetStyle().ItemSpacing.y);
+}
+
+// "Good Choices" or "Wrong Choices": title, behavior buttons (green/red) in
+// their own scroll area at most maxListHeight tall, and the
+// "+ CREATE A ... CHOICE" button, which stays visible below the list.
+// Everything is at most columnWidth wide.
+static void drawChoiceColumn(BehaviorLog &log, std::vector<BehaviorChoice> &choices,
+                             bool isGood, float columnWidth, bool spacingAfterTitle,
+                             float maxListHeight)
+{
+    ImGui::Text(isGood ? "Good Choices" : "Wrong Choices");
+    if (spacingAfterTitle)
+        ImGui::Spacing();
+
+    if (isGood)
+    {
+        ImGui::PushStyleColor(
+            ImGuiCol_Button, ImVec4(0.12f, 0.55f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(
+            ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.70f, 0.45f, 1.0f));
+    }
+    else
+    {
+        ImGui::PushStyleColor(
+            ImGuiCol_Button, ImVec4(0.75f, 0.20f, 0.22f, 1.0f));
+        ImGui::PushStyleColor(
+            ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.30f, 0.30f, 1.0f));
+    }
+
+    const float listHeight = choiceListHeight(choices, isGood);
+    if (listHeight > 0.0f)
+    {
+        // Room for the buttons plus a scrollbar beside them (it only shows
+        // when the list is taller than the space for it); never so narrow
+        // that a label is cut off.
+        const ImGuiStyle &style = ImGui::GetStyle();
+        float listWidth = kBehaviorButtonSize.x + style.ScrollbarSize;
+        if (listWidth > columnWidth) listWidth = columnWidth;
+        const float widest = widestChoiceButton(choices) + style.ScrollbarSize;
+        if (listWidth < widest) listWidth = widest;
+
+        const float height = (listHeight < maxListHeight) ? listHeight : maxListHeight;
+        ImGui::BeginChild(isGood ? "GoodChoiceList" : "WrongChoiceList",
+                          ImVec2(listWidth, height));
+        // Buttons fill the list's width (minus its scrollbar when shown),
+        // up to their normal width
+        drawChoiceButtons(log, choices, isGood, ImGui::GetContentRegionAvail().x);
+        bool &scrollToNew = g_scrollToNewChoice[isGood ? 0 : 1];
+        if (scrollToNew)
+        {
+            ImGui::SetScrollHereY(1.0f); // show the choice that was just added
+            scrollToNew = false;
+        }
+        ImGui::EndChild();
+    }
+
+    ImGui::PopStyleColor(2);
+
+    // Drawn after popping the green/red, so the "New ... Choice" popup uses
+    // the standard (blue) button colour.
+    drawAddChoiceButton(isGood, choices, columnWidth);
 }
 
 int main()
@@ -436,13 +557,17 @@ int main()
             ImGui::Text("Current Points: %d", log.currentPoints());
 
             // History button sits on the same row as the points display
-            // (the buttons move to the next row if the window is too narrow)
-            UiLayout::SameLineOrWrap(200.0f, 60.0f);
+            // (the buttons move to the next row if the window is too narrow).
+            // Decided as if the vertical scrollbar were showing, so whether
+            // the row wraps can't depend on (and flip) the scrollbar.
+            const float headerRight = UiLayout::RowRight() -
+                ((ImGui::GetScrollMaxY() > 0.0f) ? 0.0f : style.ScrollbarSize);
+            UiLayout::SameLineOrWrap(200.0f, 60.0f, -1.0f, headerRight);
             if (ImGui::Button("History", ImVec2(200, 55)))
             {
                 screen = Screen::History;
             }
-            UiLayout::SameLineOrWrap(200.0f);
+            UiLayout::SameLineOrWrap(200.0f, -1.0f, -1.0f, headerRight);
             if (ImGui::Button("Trends", ImVec2(200, 55)))
             {
                 OpenTrendsScreen(screen);
@@ -450,38 +575,103 @@ int main()
 
             ImGui::Separator();
 
-            ImGui::Text("Good Choices");
-            ImGui::Spacing();
+            // Good Choices and Wrong Choices side by side when both columns
+            // fit; one above the other when the window is too narrow.
+            // The decision is made as if the vertical scrollbar were showing,
+            // so switching layouts (which can add or remove the scrollbar)
+            // can't make it flip back and forth.
+            const float availableWidth = ImGui::GetContentRegionAvail().x;
+            const float layoutWidth = availableWidth -
+                ((ImGui::GetScrollMaxY() > 0.0f) ? 0.0f : style.ScrollbarSize);
+            // (room for the widest label plus the list's scrollbar)
+            float minColumnWidth = widestChoiceButton(choices) + style.ScrollbarSize;
+            if (minColumnWidth < kMinChoiceColumnWidth) minColumnWidth = kMinChoiceColumnWidth;
+            const bool sideBySide =
+                (layoutWidth - kChoiceColumnGap) * 0.5f >= minColumnWidth;
 
-            ImGui::PushStyleColor(
-                ImGuiCol_Button, ImVec4(0.12f, 0.55f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(
-                ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.70f, 0.45f, 1.0f));
+            // Height available for the two lists of behavior buttons: the
+            // rest of the window, minus everything else in the column(s):
+            // titles, spacing, "+ CREATE" buttons and separators.
+            const float spacingY = style.ItemSpacing.y;
+            const float titleHeight = ImGui::GetTextLineHeight();
+            const float availableHeight = ImGui::GetContentRegionAvail().y;
+            const float minListHeight = minChoiceListHeight();
+            const float goodListHeight = choiceListHeight(choices, true);
+            const float wrongListHeight = choiceListHeight(choices, false);
 
-            drawChoiceButtons(log, choices, true);
+            if (sideBySide)
+            {
+                float columnWidth = (availableWidth - kChoiceColumnGap) * 0.5f;
+                const float listColumnWidth = columnWidth; // the list's scrollbar may use the gap
+                if (columnWidth > kBehaviorButtonSize.x) columnWidth = kBehaviorButtonSize.x;
+                const ImVec2 start = ImGui::GetCursorPos();
+                const ImVec2 startOnScreen = ImGui::GetCursorScreenPos();
 
-            ImGui::PopStyleColor(2);
+                // Each column: title, spacing, list, spacing x2, "+ CREATE",
+                // then the separator below both columns.
+                float maxListHeight = availableHeight -
+                    (titleHeight + 5.0f * spacingY + kAddChoiceButtonHeight + 2.0f);
+                if (maxListHeight < minListHeight) maxListHeight = minListHeight;
 
-            // Drawn after popping the green, so the "New Good Choice" popup
-            // uses the standard (blue) button colour.
-            drawAddChoiceButton(true, choices);
+                ImGui::BeginGroup();
+                drawChoiceColumn(log, choices, true, listColumnWidth, true, maxListHeight);
+                ImGui::EndGroup();
+                const float goodBottom = ImGui::GetCursorPosY();
+                float columnsBottomOnScreen = ImGui::GetItemRectMax().y;
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Text("Wrong Choices");
+                // Second column starts level with the first (SetCursorPos
+                // rather than SameLine, so both titles line up exactly)
+                ImGui::SetCursorPos(ImVec2(start.x + columnWidth + kChoiceColumnGap, start.y));
+                ImGui::BeginGroup();
+                drawChoiceColumn(log, choices, false, listColumnWidth, true, maxListHeight);
+                ImGui::EndGroup();
 
-            ImGui::PushStyleColor(
-                ImGuiCol_Button, ImVec4(0.75f, 0.20f, 0.22f, 1.0f));
-            ImGui::PushStyleColor(
-                ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.30f, 0.30f, 1.0f));
+                if (ImGui::GetItemRectMax().y > columnsBottomOnScreen)
+                    columnsBottomOnScreen = ImGui::GetItemRectMax().y;
 
-            drawChoiceButtons(log, choices, false);
+                // Divider between the columns, from the titles down to the
+                // bottom of the longer column
+                const float dividerX =
+                    startOnScreen.x + columnWidth + kChoiceColumnGap * 0.5f;
+                const float halfWidth = kChoiceColumnDividerWidth * 0.5f;
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImVec2(dividerX - halfWidth, startOnScreen.y),
+                    ImVec2(dividerX + halfWidth, columnsBottomOnScreen),
+                    ImGui::GetColorU32(kChoiceColumnDivider), halfWidth);
 
-            ImGui::PopStyleColor(2);
+                // Continue below whichever column is longer
+                if (ImGui::GetCursorPosY() < goodBottom)
+                    ImGui::SetCursorPosY(goodBottom);
+            }
+            else
+            {
+                // Stacked: the two lists share the height. Each gets half,
+                // but a list that needs less than half gives the rest to the
+                // other one.
+                const float budget = availableHeight -
+                    (2.0f * titleHeight + 11.0f * spacingY + 2.0f * kAddChoiceButtonHeight + 4.0f);
+                float goodMax = goodListHeight;
+                float wrongMax = wrongListHeight;
+                if (goodListHeight + wrongListHeight > budget)
+                {
+                    const float half = budget * 0.5f;
+                    if (goodListHeight <= half)
+                        wrongMax = budget - goodListHeight;
+                    else if (wrongListHeight <= half)
+                        goodMax = budget - wrongListHeight;
+                    else
+                        goodMax = wrongMax = half;
+                }
+                if (goodMax < minListHeight) goodMax = minListHeight;
+                if (wrongMax < minListHeight) wrongMax = minListHeight;
 
-            // Drawn after popping the red, so the "New Wrong Choice" popup
-            // uses the standard (blue) button colour.
-            drawAddChoiceButton(false, choices);
+                drawChoiceColumn(log, choices, true, availableWidth, true, goodMax);
+
+                ImGui::Spacing();
+                ImGui::Separator();
+
+                drawChoiceColumn(log, choices, false, availableWidth, false, wrongMax);
+            }
             ImGui::Separator();
         }
 
