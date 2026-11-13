@@ -29,3 +29,6 @@ GOOD|2|Completed School Project
 WRONG|1|Throwing a hat
 WRONG|1|Dragging a baseball bat
 GOOD|1|Helped bath rat
+GOOD|1|Washed Dishes
+WRONG|3|Exploded instead of explaining
+WRONG|1|Arguing with Adult

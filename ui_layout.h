@@ -72,6 +72,138 @@ inline float FitButtonWidth(float preferred, float minimum, int count, float ava
     return std::max(minimum, std::min(preferred, shared));
 }
 
+// ---- Results tables ----------------------------------------------------------
+// The results tables (History's day detail, Trends' rankings and Time of Day)
+// draw a thin vertical line between columns and leave a small gap on each
+// side of it, so neighbouring columns and headers never run together (e.g.
+// "Points" and "Total After" reading as "Points Total After"), even when a
+// narrow window packs the columns tightly.
+
+// Add to the table's flags: thin lines between columns.
+inline constexpr ImGuiTableFlags kTableColumnDividers = ImGuiTableFlags_BordersInnerV;
+
+// Space between a cell's text and the column divider (the app's normal cell
+// padding is 6), so columns are about 20px apart with the line in the middle.
+inline constexpr float kTableCellPaddingX = 10.0f;
+
+// Width each column takes up beyond its contents: the gap on both sides plus
+// its divider. Use this when working out how wide a table needs to be.
+inline float TableColumnExtraWidth()
+{
+    return kTableCellPaddingX * 2.0f + 1.0f;
+}
+
+// Call PushTableSpacing() before BeginTable() and PopTableSpacing() after the
+// table (whether or not BeginTable() returned true).
+inline void PushTableSpacing()
+{
+    ImGui::PushStyleVarX(ImGuiStyleVar_CellPadding, kTableCellPaddingX);
+}
+inline void PopTableSpacing()
+{
+    ImGui::PopStyleVar();
+}
+
+// Size and scrolling for a results table, worked out before BeginTable():
+//
+//   ui::TableLayout layout = ui::PlanTable(rows, minimumHeight);
+//   ... pick column widths to fit layout.room ...
+//   ui::FinishTable(layout, neededWidth);
+//   BeginTable(id, columns, flags | layout.flags, ImVec2(0, layout.height),
+//              layout.innerWidth);
+//
+// The table is just tall enough for its rows when they fit in the space left
+// (so it ends cleanly at the last row, with no empty strip below it), or it
+// fills the space and scrolls if there are more rows (never shorter than
+// 'minimumHeight'; the screen scrolls to it instead). It only scrolls
+// sideways, and only leaves room for scrollbars, when it really needs them.
+struct TableLayout
+{
+    float room = 0.0f;        // width the columns can use without scrolling sideways
+    float height = 0.0f;      // outer height to pass to BeginTable()
+    float innerWidth = 0.0f;  // inner width to pass to BeginTable()
+    ImGuiTableFlags flags = 0; // ImGuiTableFlags_ScrollX when it scrolls sideways
+    bool scrollsDown = false; // more rows than fit: a vertical scrollbar shows
+    float contentHeight = 0.0f;
+    float available = 0.0f;   // height left in the window
+    float minimum = 0.0f;
+};
+
+// Height of a table's rows (header included), as ImGui lays them out.
+inline float TableRowsHeight(size_t rows)
+{
+    const float rowHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
+    return rowHeight * static_cast<float>(rows + 1);
+}
+
+// Step 1: height and vertical scrolling for 'rows' rows plus the header.
+inline TableLayout PlanTable(size_t rows, float minimumHeight = 0.0f)
+{
+    TableLayout layout;
+    // +1 for the closing line under the last row (see EndTableRows()).
+    layout.contentHeight = TableRowsHeight(rows) + 1.0f;
+    layout.available = ImGui::GetContentRegionAvail().y;
+    layout.minimum = minimumHeight;
+    layout.height = (layout.contentHeight <= layout.available)
+                        ? layout.contentHeight
+                        : std::max(layout.available,
+                                   std::min(layout.contentHeight, minimumHeight));
+    layout.scrollsDown = layout.contentHeight > layout.height;
+    layout.room = ImGui::GetContentRegionAvail().x -
+                  (layout.scrollsDown ? ImGui::GetStyle().ScrollbarSize : 0.0f);
+    return layout;
+}
+
+// Step 2: once the columns' total width is known ('neededWidth', padding
+// included), scroll sideways only if they don't fit in layout.room.
+inline void FinishTable(TableLayout &layout, float neededWidth)
+{
+    if (neededWidth <= layout.room)
+        return;
+    const float scrollbar = ImGui::GetStyle().ScrollbarSize;
+    layout.flags |= ImGuiTableFlags_ScrollX;
+    layout.innerWidth = neededWidth;
+    if (!layout.scrollsDown)
+    {
+        // Make room under the rows for the sideways scrollbar; if that no
+        // longer fits, the table fills the space and scrolls down too.
+        const float wanted = layout.contentHeight + scrollbar;
+        layout.height = (wanted <= layout.available)
+                            ? wanted
+                            : std::max(layout.available, std::min(wanted, layout.minimum));
+        layout.scrollsDown = wanted > layout.height;
+    }
+}
+
+// Call after a table's last row, just before EndTable(). Closes the table off
+// with the same thin line that separates its rows, so a table never looks
+// unfinished. (ImGui draws each separating line as the top edge of the next
+// row, and skips the one under the last row when it falls right on the
+// bottom edge, which is exactly where it is when a scrolling table is
+// scrolled to the end. This ends the rows with a 1px row whose top edge is
+// that line, and which is part of what scrolls, so the line is always there.)
+inline void EndTableRows()
+{
+    ImGui::PushStyleVarY(ImGuiStyleVar_CellPadding, 0.0f); // row is exactly 1px
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, 1.0f);
+    ImGui::PopStyleVar();
+}
+
+// Text drawn against the right edge of the current table cell, e.g. times, so
+// "12:56 PM" and "1:05 AM" line up on the right, leaving the gap and divider
+// before the next column clear.
+inline void TextRightAligned(const char *text, const ImVec4 *color = nullptr)
+{
+    const float textWidth = ImGui::CalcTextSize(text).x;
+    const float room = ImGui::GetContentRegionAvail().x;
+    if (room > textWidth)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room - textWidth);
+    if (color)
+        ImGui::TextColored(*color, "%s", text);
+    else
+        ImGui::TextUnformatted(text);
+}
+
 // True for a few frames after the app window changes size (an auto-resizing
 // popup needs a frame or two to settle at its new size).
 inline bool DisplayRecentlyResized()

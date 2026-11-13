@@ -494,9 +494,12 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
                         day->entries.size() == 1 ? "" : "s");
     ImGui::Spacing();
 
+    // Thin lines and a small gap between columns keep them (and their
+    // headers) visibly apart, even when a narrow window packs them tightly.
     ImGuiTableFlags tableFlags =
         ImGuiTableFlags_RowBg |
         ImGuiTableFlags_BordersInnerH |
+        ui::kTableColumnDividers |
         ImGuiTableFlags_SizingStretchProp |
         ImGuiTableFlags_ScrollY;
 
@@ -520,30 +523,25 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
         std::snprintf(number, sizeof(number), "%d", entry.pointsAfter);
         totalWidth = std::max(totalWidth, ImGui::CalcTextSize(number).x);
     }
-    const float padding = tableStyle.CellPadding.x * 2.0f * 4.0f; // 4 columns
-    const float room = ImGui::GetContentRegionAvail().x - tableStyle.ScrollbarSize;
-    if (170.0f + behaviorWidth + 120.0f + 180.0f + padding <= room)
+    // Height and scrolling first (a vertical scrollbar takes width from the
+    // columns), then the column widths for the width that's left.
+    const float minTableHeight =
+        ui::TableRowsHeight(4) + tableStyle.ScrollbarSize; // header + 4 rows
+    ui::TableLayout layout = ui::PlanTable(day->entries.size(), minTableHeight);
+
+    const float padding = ui::TableColumnExtraWidth() * 4.0f; // 4 columns
+    if (170.0f + behaviorWidth + 120.0f + 180.0f + padding <= layout.room)
     {
         timeWidth = 170.0f; // the usual widths
         pointsWidth = 120.0f;
         totalWidth = 180.0f;
     }
-    const float neededWidth = timeWidth + behaviorWidth + pointsWidth + totalWidth + padding;
-    float innerWidth = 0.0f;
-    if (room < neededWidth)
-    {
-        tableFlags |= ImGuiTableFlags_ScrollX;
-        innerWidth = neededWidth;
-    }
+    ui::FinishTable(layout, timeWidth + behaviorWidth + pointsWidth + totalWidth + padding);
+    tableFlags |= layout.flags;
 
-    // Fills the rest of the screen, but keeps a few rows visible on a short
-    // window (the screen scrolls down to it instead).
-    const float minTableHeight =
-        (ImGui::GetTextLineHeight() + tableStyle.CellPadding.y * 2.0f) * 5.0f +
-        tableStyle.ScrollbarSize;
-    const float tableHeight = (ImGui::GetContentRegionAvail().y < minTableHeight) ? minTableHeight : 0.0f;
-
-    if (ImGui::BeginTable("DayEntries", 4, tableFlags, ImVec2(0.0f, tableHeight), innerWidth))
+    ui::PushTableSpacing();
+    if (ImGui::BeginTable("DayEntries", 4, tableFlags, ImVec2(0.0f, layout.height),
+                          layout.innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1); // keep the header visible
         ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, timeWidth);
@@ -552,11 +550,16 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
         ImGui::TableSetupColumn("Total After", ImGuiTableColumnFlags_WidthFixed, totalWidth);
         // Header row drawn as plain text (not TableHeadersRow(), whose cells
         // are interactive sort/menu buttons). Keeps the header background.
+        // Times (and their header) are right-aligned so they line up on the
+        // right ("12:56 PM" over "1:05 AM"), clear of the behavior beside them.
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
         for (int column = 0; column < 4; ++column)
         {
             ImGui::TableSetColumnIndex(column);
-            ImGui::TextUnformatted(ImGui::TableGetColumnName(column));
+            if (column == 0)
+                ui::TextRightAligned(ImGui::TableGetColumnName(column));
+            else
+                ImGui::TextUnformatted(ImGui::TableGetColumnName(column));
         }
 
         for (const BehaviorEntry &entry : day->entries)
@@ -564,7 +567,7 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(BehaviorLog::formatFriendlyTime(entry.timestamp).c_str());
+            ui::TextRightAligned(BehaviorLog::formatFriendlyTime(entry.timestamp).c_str());
 
             ImGui::TableSetColumnIndex(1);
             ImGui::TextUnformatted(entry.label.c_str());
@@ -577,6 +580,8 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
             ImGui::Text("%d", entry.pointsAfter);
         }
 
+        ui::EndTableRows();
         ImGui::EndTable();
     }
+    ui::PopTableSpacing();
 }

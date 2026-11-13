@@ -1,4 +1,4 @@
-27
+41
 2026-10-13 13:54:37|5|9|Completed Morning Routine
 2026-10-13 13:54:46|-3|16|Negative Behavior
 2026-10-14 13:54:38|2|11|Followed Directions
@@ -80,3 +80,8 @@
 2026-11-12 13:50:53|-1|26|Dragging a baseball bat
 2026-11-12 13:50:54|-1|25|Throwing a hat
 2026-11-12 13:50:55|2|27|Completed School Project
+2026-11-12 14:20:40|-4|23|Disrupting Everyone's Sleep
+2026-11-12 14:20:43|1|24|Brushed Teeth Without Issues
+2026-11-12 14:20:45|7|31|Completing a Chore With Out Asking
+2026-11-12 14:20:46|5|36|Completed Bedtime Routing With Out Asking
+2026-11-12 19:44:32|5|41|Completed Morning Routine

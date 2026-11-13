@@ -173,9 +173,12 @@ template <typename T>
 static float FitToggleWidth(const std::vector<ToggleOption<T>> &options, float preferred,
                             float available)
 {
+    // When space is short the buttons may use half the usual padding around
+    // their labels (see SegmentedToggle), but never less.
     float widest = 0.0f;
     for (const ToggleOption<T> &option : options)
-        widest = std::max(widest, ui::ButtonWidthFor(option.label));
+        widest = std::max(widest, ImGui::CalcTextSize(option.label, nullptr, true).x +
+                                      ImGui::GetStyle().FramePadding.x);
     return ui::FitButtonWidth(preferred, widest, static_cast<int>(options.size()), available,
                               kToggleGap);
 }
@@ -203,8 +206,18 @@ static void SegmentedToggle(const char *id, const std::vector<ToggleOption<T>> &
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? kToggleOnHover : kToggleOffHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, kToggleOn);
         ImGui::PushID(static_cast<int>(i));
+        // A button narrower than usual (a small window) gets less padding
+        // around its label, so the label still shows in full.
+        const float labelWidth = ImGui::CalcTextSize(options[i].label, nullptr, true).x;
+        const float padding = ImGui::GetStyle().FramePadding.x;
+        const bool tight = buttonWidth < labelWidth + padding * 2.0f;
+        if (tight)
+            ImGui::PushStyleVarX(ImGuiStyleVar_FramePadding,
+                                 std::max(1.0f, (buttonWidth - labelWidth) * 0.5f));
         if (ImGui::Button(options[i].label, ImVec2(buttonWidth, 0.0f)))
             value = options[i].value;
+        if (tight)
+            ImGui::PopStyleVar();
         Hint(options[i].hint);
         ImGui::PopID();
         ImGui::PopStyleColor(3);
@@ -603,54 +616,40 @@ static void DrawFilterPanel(TrendsScreenState &state, const std::vector<HistoryD
 
 // Header row drawn as plain text, like the Day Detail table (TableHeadersRow()
 // cells are interactive sort/menu buttons, which we don't want here).
-static void PlainHeaderRow(int columns)
+// 'rightAlignedColumn' (if any) is right-aligned to match its values.
+static void PlainHeaderRow(int columns, int rightAlignedColumn = -1)
 {
     ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
     for (int column = 0; column < columns; ++column)
     {
         ImGui::TableSetColumnIndex(column);
-        ImGui::TextUnformatted(ImGui::TableGetColumnName(column));
+        if (column == rightAlignedColumn)
+            ui::TextRightAligned(ImGui::TableGetColumnName(column));
+        else
+            ImGui::TextUnformatted(ImGui::TableGetColumnName(column));
     }
 }
 
+// Thin lines and a small gap between columns keep them (and their headers)
+// visibly apart, even when a narrow window packs them tightly. (Tables also
+// need ui::PushTableSpacing() / ui::PopTableSpacing() around them.)
 static const ImGuiTableFlags kTableFlags =
-    ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
+    ImGuiTableFlags_BordersInnerH | ui::kTableColumnDividers |
+    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
 
 // Shortest a results table (or ranking column) gets on a small window: the
 // header plus a few rows. Below that the screen scrolls instead.
 static float MinTableHeight()
 {
-    const ImGuiStyle &style = ImGui::GetStyle();
-    const float rowHeight = ImGui::GetTextLineHeight() + style.CellPadding.y * 2.0f;
-    return rowHeight * 5.0f + style.ScrollbarSize;
-}
-
-// Sets 'flags' and returns the inner width for BeginTable(): the table fills
-// the space as usual, but if that is narrower than 'neededWidth' (so names
-// would be cut off) it scrolls sideways instead.
-static float TableInnerWidth(float neededWidth, ImGuiTableFlags &flags)
-{
-    neededWidth += ImGui::GetStyle().ScrollbarSize;
-    if (ImGui::GetContentRegionAvail().x >= neededWidth)
-        return 0.0f;
-    flags |= ImGuiTableFlags_ScrollX;
-    return neededWidth;
-}
-
-// Height to pass to BeginTable(): 0 (fill the rest of the window) unless that
-// would leave too little room for the table to be usable.
-static float TableOuterHeight()
-{
-    return (ImGui::GetContentRegionAvail().y < MinTableHeight()) ? MinTableHeight() : 0.0f;
+    return ui::TableRowsHeight(4) + ImGui::GetStyle().ScrollbarSize; // header + 4 rows
 }
 
 // Width for a fixed-width table column: 'preferred' when the table has room
-// for it next to everything else ('rest': the other columns plus all cell
-// padding), otherwise just wide enough for its contents ('compact'), so the
-// behavior names beside it aren't squeezed.
-static float FixedColumnWidth(float preferred, float compact, float rest)
+// for it ('room', see ui::PlanTable) next to everything else ('rest': the
+// other columns plus all cell padding), otherwise just wide enough for its
+// contents ('compact'), so the behavior names beside it aren't squeezed.
+static float FixedColumnWidth(float preferred, float compact, float rest, float room)
 {
-    const float room = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;
     return (rest + preferred <= room) ? preferred : std::min(preferred, compact);
 }
 
@@ -664,7 +663,7 @@ static float WidestTimesLabel(const Rows &rows, const char *header)
     return widest;
 }
 
-// Widest behavior name among 'rows' (or the column header), for TableInnerWidth().
+// Widest behavior name among 'rows' (or the column header).
 template <typename Rows>
 static float WidestName(const Rows &rows, const char *header)
 {
@@ -687,7 +686,7 @@ static float RankingColumnMinWidth(const std::vector<BehaviorEntry> &entries,
         const std::vector<BehaviorCount> rows =
             RankBehaviors(entries, choices, good, RankOrder::MostFirst);
         const float table = WidestName(rows, "Behavior") + WidestTimesLabel(rows, "Times Logged") +
-                            style.CellPadding.x * 4.0f + style.ScrollbarSize;
+                            ui::TableColumnExtraWidth() * 2.0f + style.ScrollbarSize;
         content = std::max(content, table);
     }
     return content + style.WindowPadding.x * 2.0f;
@@ -701,11 +700,19 @@ static float RankingColumnMinHeight()
            style.ItemSpacing.y * 3.0f + MinTableHeight();
 }
 
+// 'compact' (a narrow window, columns stacked) halves the padding inside the
+// column's border, leaving more room for the table.
 static void DrawRankingColumn(const char *id, const char *title, bool good, const ImVec2 &size,
-                              const std::vector<BehaviorEntry> &entries,
+                              bool compact, const std::vector<BehaviorEntry> &entries,
                               const std::vector<BehaviorChoice> &choices, RankOrder &order)
 {
+    if (compact)
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(ImGui::GetStyle().WindowPadding.x * 0.5f,
+                                   ImGui::GetStyle().WindowPadding.y * 0.5f));
     ImGui::BeginChild(id, size, ImGuiChildFlags_Borders);
+    if (compact)
+        ImGui::PopStyleVar();
 
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.3f);
     ImGui::TextColored(good ? kGoodText : kWrongText, "%s", title);
@@ -734,13 +741,17 @@ static void DrawRankingColumn(const char *id, const char *title, bool good, cons
         return;
     }
 
-    const float padding = ImGui::GetStyle().CellPadding.x * 2.0f * 2.0f; // 2 columns
+    // Height and scrolling first (a vertical scrollbar takes width from the
+    // columns), then the column widths for the width that's left.
+    ui::TableLayout layout = ui::PlanTable(rows.size());
+    const float padding = ui::TableColumnExtraWidth() * 2.0f; // 2 columns
     const float nameWidth = WidestName(rows, "Behavior");
-    const float timesWidth =
-        FixedColumnWidth(210.0f, WidestTimesLabel(rows, "Times Logged"), nameWidth + padding);
-    ImGuiTableFlags flags = kTableFlags;
-    const float innerWidth = TableInnerWidth(nameWidth + timesWidth + padding, flags);
-    if (ImGui::BeginTable("Ranking", 2, flags, ImVec2(0.0f, 0.0f), innerWidth))
+    const float timesWidth = FixedColumnWidth(210.0f, WidestTimesLabel(rows, "Times Logged"),
+                                              nameWidth + padding, layout.room);
+    ui::FinishTable(layout, nameWidth + timesWidth + padding);
+    ui::PushTableSpacing();
+    if (ImGui::BeginTable("Ranking", 2, kTableFlags | layout.flags,
+                          ImVec2(0.0f, layout.height), layout.innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthStretch);
@@ -761,8 +772,10 @@ static void DrawRankingColumn(const char *id, const char *title, bool good, cons
             ImGui::TextColored(row.count == 0 ? kMutedText : (good ? kGoodText : kWrongText),
                                "%s", TimesLabel(row.count).c_str());
         }
+        ui::EndTableRows();
         ImGui::EndTable();
     }
+    ui::PopTableSpacing();
 
     ImGui::EndChild();
 }
@@ -782,19 +795,19 @@ static void DrawMostLeastTab(const std::vector<BehaviorEntry> &entries,
     {
         const float half = (avail.x - style.ItemSpacing.x) * 0.5f;
         const float height = std::max(avail.y, minHeight);
-        DrawRankingColumn("GoodRanking", "Good Choices", true, ImVec2(half, height), entries,
+        DrawRankingColumn("GoodRanking", "Good Choices", true, ImVec2(half, height), false, entries,
                           choices, options.goodOrder);
         ImGui::SameLine();
-        DrawRankingColumn("WrongRanking", "Wrong Choices", false, ImVec2(0.0f, height), entries,
-                          choices, options.wrongOrder);
+        DrawRankingColumn("WrongRanking", "Wrong Choices", false, ImVec2(0.0f, height), false,
+                          entries, choices, options.wrongOrder);
     }
     else
     {
         const float height = std::max((avail.y - style.ItemSpacing.y) * 0.5f, minHeight);
-        DrawRankingColumn("GoodRanking", "Good Choices", true, ImVec2(0.0f, height), entries,
+        DrawRankingColumn("GoodRanking", "Good Choices", true, ImVec2(0.0f, height), true, entries,
                           choices, options.goodOrder);
-        DrawRankingColumn("WrongRanking", "Wrong Choices", false, ImVec2(0.0f, height), entries,
-                          choices, options.wrongOrder);
+        DrawRankingColumn("WrongRanking", "Wrong Choices", false, ImVec2(0.0f, height), true,
+                          entries, choices, options.wrongOrder);
     }
 }
 
@@ -816,19 +829,35 @@ static void DrawTimeOfDayTab(const std::vector<BehaviorEntry> &entries,
          "Hours with nothing logged go last."}};
     const float labelWidth = std::max(ImGui::CalcTextSize("Show:").x,
                                       ImGui::CalcTextSize("Sort:").x) + style.ItemSpacing.x;
-    const float toggleRoom = ImGui::GetContentRegionAvail().x - labelWidth;
-    const float kindWidth = FitToggleWidth(kindOptions, 200.0f, toggleRoom);
-    const float sortWidth = FitToggleWidth(sortOptions, 260.0f, toggleRoom);
+    const float rowWidth = ImGui::GetContentRegionAvail().x;
+
+    // Each group of buttons sits beside its label, or, if it can't fit there
+    // even with narrower buttons, on its own line just below (so a group is
+    // never split across lines).
+    const auto groupWidth = [&](const auto &groupOptions, float preferred) {
+        float width = FitToggleWidth(groupOptions, preferred, rowWidth - labelWidth);
+        if (ToggleGroupWidth(groupOptions.size(), width) > rowWidth - labelWidth)
+            width = FitToggleWidth(groupOptions, preferred, rowWidth);
+        return width;
+    };
+    const float kindWidth = groupWidth(kindOptions, 200.0f);
+    const float sortWidth = groupWidth(sortOptions, 260.0f);
+    const bool kindBesideLabel =
+        ToggleGroupWidth(kindOptions.size(), kindWidth) <= rowWidth - labelWidth;
+    const bool sortBesideLabel =
+        ToggleGroupWidth(sortOptions.size(), sortWidth) <= rowWidth - labelWidth;
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Show:");
-    ImGui::SameLine();
+    if (kindBesideLabel)
+        ImGui::SameLine();
     SegmentedToggle<ChoiceKind>("kind", kindOptions, options.timeKind, kindWidth);
 
     ui::SameLineIfFits(labelWidth + ToggleGroupWidth(sortOptions.size(), sortWidth), 50.0f);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Sort:");
-    ImGui::SameLine();
+    if (sortBesideLabel)
+        ImGui::SameLine();
     SegmentedToggle<TimeOfDaySort>("sort", sortOptions, options.timeSort, sortWidth);
 
     TextWrappedColored(kMutedText, "Each row is one hour of the day, added up across every "
@@ -846,27 +875,30 @@ static void DrawTimeOfDayTab(const std::vector<BehaviorEntry> &entries,
     const std::vector<HourRow> rows = TimeOfDayRows(entries, options.timeKind, options.timeSort);
     const std::string emptyText = EmptyHourLabel(options.timeKind);
 
-    const float padding = style.CellPadding.x * 2.0f * 3.0f; // 3 columns
+    // Height and scrolling first (a vertical scrollbar takes width from the
+    // columns), then the column widths for the width that's left.
+    ui::TableLayout layout = ui::PlanTable(rows.size(), MinTableHeight());
+    const float padding = ui::TableColumnExtraWidth() * 3.0f; // 3 columns
     const float behaviorWidth = std::max(WidestName(rows, "Behavior"),
                                          ImGui::CalcTextSize(emptyText.c_str()).x);
     float widestHour = ImGui::CalcTextSize("Time").x;
     for (const HourRow &row : rows)
         widestHour = std::max(widestHour, ImGui::CalcTextSize(HourBlockLabel(row.hour).c_str()).x);
     const float compactTimes = WidestTimesLabel(rows, "Times Logged");
-    const float timesWidth =
-        FixedColumnWidth(210.0f, compactTimes, behaviorWidth + 220.0f + padding);
-    const float timeWidth =
-        FixedColumnWidth(220.0f, widestHour, behaviorWidth + timesWidth + padding);
-    ImGuiTableFlags flags = kTableFlags;
-    const float innerWidth =
-        TableInnerWidth(timeWidth + behaviorWidth + timesWidth + padding, flags);
-    if (ImGui::BeginTable("TimeOfDay", 3, flags, ImVec2(0.0f, TableOuterHeight()), innerWidth))
+    const float timesWidth = FixedColumnWidth(210.0f, compactTimes,
+                                              behaviorWidth + 220.0f + padding, layout.room);
+    const float timeWidth = FixedColumnWidth(220.0f, widestHour,
+                                             behaviorWidth + timesWidth + padding, layout.room);
+    ui::FinishTable(layout, timeWidth + behaviorWidth + timesWidth + padding);
+    ui::PushTableSpacing();
+    if (ImGui::BeginTable("TimeOfDay", 3, kTableFlags | layout.flags,
+                          ImVec2(0.0f, layout.height), layout.innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, timeWidth);
         ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Times Logged", ImGuiTableColumnFlags_WidthFixed, timesWidth);
-        PlainHeaderRow(3);
+        PlainHeaderRow(3, 0); // hours right-aligned, like the times in History
 
         // Sorted by hour: shade alternate hours so each hour reads as a group.
         // Sorted by count: shade alternate rows.
@@ -888,7 +920,7 @@ static void DrawTimeOfDayTab(const std::vector<BehaviorEntry> &entries,
                 ++shade;
 
             ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(HourBlockLabel(row.hour).c_str());
+            ui::TextRightAligned(HourBlockLabel(row.hour).c_str());
 
             ImGui::TableSetColumnIndex(1);
             if (row.IsEmptyHour())
@@ -902,8 +934,10 @@ static void DrawTimeOfDayTab(const std::vector<BehaviorEntry> &entries,
             ImGui::TableSetColumnIndex(2);
             ImGui::TextColored(color, "%s", TimesLabel(row.count).c_str());
         }
+        ui::EndTableRows();
         ImGui::EndTable();
     }
+    ui::PopTableSpacing();
 }
 
 void DrawTrendsScreen(const BehaviorLog &log, const std::vector<BehaviorChoice> &choices,
