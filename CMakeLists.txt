@@ -34,6 +34,8 @@ add_executable(BehaviorTracker
     trends.cpp
     trends_view.cpp
     trends_export.cpp
+    localization/strings.cpp
+    localization/strings_eng.cpp
     ${IMGUI_SOURCES}
 )
 

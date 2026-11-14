@@ -33,7 +33,8 @@ enum class ChoiceKind
 //   1. Add a field below with a default value that lets everything through.
 //   2. Check it in MatchesDay() (whole-day filters) or MatchesEntry()
 //      (per-behavior filters) in trends.cpp.
-//   3. Describe it in Describe() so it is printed on the exported PDF.
+//   3. Describe it in Describe() so it is printed on the exported PDF
+//      (its text goes in localization/strings_eng.cpp, like all other text).
 //   4. Add a control for it in DrawFilterPanel() in trends_view.cpp.
 // Every count on both tabs, and the PDF export, then respects it.
 // ---------------------------------------------------------------------------
@@ -125,7 +126,8 @@ std::vector<HourRow> TimeOfDayRows(const std::vector<BehaviorEntry> &entries,
                                    ChoiceKind kind, TimeOfDaySort sort);
 
 // ---------------------------------------------------------------------------
-// Text helpers shared by the screen and the PDF
+// Text helpers shared by the screen and the PDF. All text is in the current
+// language (see localization/strings.h); the examples are the English text.
 // ---------------------------------------------------------------------------
 
 // "12am-1am", "7am-8am", "11am-12pm", "12pm-1pm", "11pm-12am"

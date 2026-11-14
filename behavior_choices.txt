@@ -32,3 +32,4 @@ GOOD|1|Helped bath rat
 GOOD|1|Washed Dishes
 WRONG|3|Exploded instead of explaining
 WRONG|1|Arguing with Adult
+GOOD|1|Listening to Adult

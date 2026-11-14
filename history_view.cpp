@@ -2,6 +2,7 @@
 
 #include "history_export.h"
 #include "imgui.h"
+#include "localization/strings.h"
 #include "trends_view.h"
 #include "ui_layout.h"
 
@@ -39,22 +40,24 @@ static const ImVec4 kExportButton(0.12f, 0.55f, 0.35f, 1.00f);      // green, li
 static const ImVec4 kExportButtonHover(0.18f, 0.70f, 0.45f, 1.00f);
 static const ImVec4 kExportButtonActive(0.10f, 0.45f, 0.28f, 1.00f);
 static const ImVec2 kExportButtonSize(260.0f, 55.0f);
-static const char *kExportPopupId = "PDF Export###ExportResultPopup";
+// The popup's title is translated; the fixed "###..." part is its ID.
+static std::string ExportPopupId()
+{
+    return std::string(Tr(TextId::ExportPopupTitle)) + "###ExportResultPopup";
+}
 
 // Outcome of the last "Export PDF" click, shown in the confirmation popup.
 struct ExportStatus
 {
     ExportResult result;
     bool openedInViewer = false;
-    std::string description = "Your behavior history"; // "... was saved to ..."
+    TextId savedMessage = TextId::ExportSavedHistory; // "... was saved to ..."
 };
 static ExportStatus g_lastExport;
 
 // Set when leaving a day's detail screen, so the calendar comes back scrolled
 // to where the parent left it instead of jumping to the newest days.
 static bool g_returningFromDayDetail = false;
-
-static const char *kWeekdayNames[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 int DaysInMonth(int year, int month)
 {
@@ -78,10 +81,7 @@ int FirstWeekdayOfMonth(int year, int month)
 
 std::string MonthTitle(int year, int month)
 {
-    static const char *kMonthNames[12] = {
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"};
-    return std::string(kMonthNames[month - 1]) + " " + std::to_string(year);
+    return Format(Tr(TextId::MonthYearTitle), {MonthName(month), year});
 }
 
 WeekRowRange VisibleWeekRows(int year, int month, int firstDay, int lastDay)
@@ -125,15 +125,13 @@ static bool DrawDayCell(const HistoryDay &day, bool isToday, ImVec2 pos, ImVec2 
     draw->AddText(ImVec2(pos.x + pad, pos.y + pad), textColor, dayNumber.c_str());
 
     // Ending points, or an explicit "No data logged" so no date looks missing
-    char detail[64];
-    if (day.hasData)
-        std::snprintf(detail, sizeof(detail), "Ending: %d pts", day.endingPoints);
-    else
-        std::snprintf(detail, sizeof(detail), "No data logged");
+    const std::string detail = day.hasData
+                                   ? TrPlural(PluralId::HistoryCellEnding, day.endingPoints)
+                                   : std::string(Tr(TextId::CommonNoDataLogged));
 
     draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
                   ImVec2(pos.x + pad, pos.y + pad + lineHeight + 6.0f),
-                  textColor, detail, nullptr, size.x - 2.0f * pad);
+                  textColor, detail.c_str(), nullptr, size.x - 2.0f * pad);
 
     return clicked;
 }
@@ -160,10 +158,11 @@ static std::string DrawMonthGrid(int year, int month,
     const ImVec2 headerOrigin = ImGui::GetCursorScreenPos();
     for (int col = 0; col < 7; ++col)
     {
-        const ImVec2 textSize = ImGui::CalcTextSize(kWeekdayNames[col]);
+        const char *weekday = WeekdayShortName(col);
+        const ImVec2 textSize = ImGui::CalcTextSize(weekday);
         draw->AddText(ImVec2(headerOrigin.x + col * stepX + (cellSize.x - textSize.x) * 0.5f,
                              headerOrigin.y),
-                      ImGui::GetColorU32(ImGuiCol_TextDisabled), kWeekdayNames[col]);
+                      ImGui::GetColorU32(ImGuiCol_TextDisabled), weekday);
     }
     const float headerHeight = ImGui::GetTextLineHeight() + 8.0f;
 
@@ -228,12 +227,12 @@ static void DrawLegendItem(const ImVec4 &fill, const ImVec4 *border, const char 
     ImGui::TextWrapped("%s", text);
 }
 
-void ShowPdfExportResult(const ExportResult &result, const char *description)
+void ShowPdfExportResult(const ExportResult &result, TextId savedMessage)
 {
     g_lastExport.result = result;
-    g_lastExport.description = description;
+    g_lastExport.savedMessage = savedMessage;
     g_lastExport.openedInViewer = result.success && OpenWithDefaultApp(result.path);
-    ImGui::OpenPopup(kExportPopupId);
+    ImGui::OpenPopup(ExportPopupId().c_str());
 }
 
 // Confirmation (or error) shown after clicking "Export PDF".
@@ -243,33 +242,31 @@ void DrawExportPopup()
     ui::CenterNextPopup();
     ImGui::SetNextWindowSize(ImVec2(ui::FitPopupWidth(950.0f), 0.0f));
 
-    if (!ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
+    if (!ImGui::BeginPopupModal(ExportPopupId().c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
         return;
 
     const ExportResult &result = g_lastExport.result;
     if (result.success)
     {
-        ImGui::TextColored(kPointsGained, "Export complete");
+        ImGui::TextColored(kPointsGained, "%s", Tr(TextId::ExportComplete));
         ImGui::Spacing();
-        ImGui::TextWrapped("%s was saved to your Downloads folder:",
-                           g_lastExport.description.c_str());
+        ImGui::TextWrapped("%s", Tr(g_lastExport.savedMessage));
         ImGui::TextWrapped("%s", result.path.u8string().c_str());
         ImGui::Spacing();
         if (g_lastExport.openedInViewer)
-            ImGui::TextWrapped("It has been opened in your default PDF viewer.");
+            ImGui::TextWrapped("%s", Tr(TextId::ExportOpenedInViewer));
         else
-            ImGui::TextWrapped("It could not be opened automatically. You can open it "
-                               "from your Downloads folder.");
+            ImGui::TextWrapped("%s", Tr(TextId::ExportNotOpened));
     }
     else
     {
-        ImGui::TextColored(kPointsLost, "Export failed");
+        ImGui::TextColored(kPointsLost, "%s", Tr(TextId::ExportFailed));
         ImGui::Spacing();
         ImGui::TextWrapped("%s", result.error.c_str());
     }
 
     ImGui::Spacing();
-    if (ImGui::Button("OK", ImVec2(200, 55)))
+    if (ImGui::Button(Tr(TextId::ExportOkButton), ImVec2(200, 55)))
         ImGui::CloseCurrentPopup();
 
     ImGui::EndPopup();
@@ -278,36 +275,34 @@ void DrawExportPopup()
 static void DrawLegend()
 {
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.15f);
-    ImGui::TextUnformatted("Legend");
+    ImGui::TextUnformatted(Tr(TextId::HistoryLegendTitle));
     ImGui::PopFont();
     ImGui::Separator();
     ImGui::Spacing();
 
-    DrawLegendItem(kDataCellBg, nullptr,
-                   "Behaviors logged. Shows the points total at the end of that day.");
-    DrawLegendItem(kNoDataCellBg, nullptr,
-                   "Grayed out: no behaviors were logged that day (\"No data logged\").");
-    DrawLegendItem(kNoDataCellBg, &kTodayBorder,
-                   "Gold outline: today.");
-    DrawLegendItem(ImVec4(0, 0, 0, 0), &kBlankCellOutline,
-                   "Blank square: date is outside the 30-day history.");
+    DrawLegendItem(kDataCellBg, nullptr, Tr(TextId::HistoryLegendLogged));
+    // Quotes the cells' own "No data logged" text, so the two always match.
+    const std::string noDataText =
+        Format(Tr(TextId::HistoryLegendNoData), {Tr(TextId::CommonNoDataLogged)});
+    DrawLegendItem(kNoDataCellBg, nullptr, noDataText.c_str());
+    DrawLegendItem(kNoDataCellBg, &kTodayBorder, Tr(TextId::CommonGoldOutlineToday));
+    DrawLegendItem(ImVec4(0, 0, 0, 0), &kBlankCellOutline, Tr(TextId::HistoryLegendBlank));
 
-    ImGui::TextWrapped("On a day's detail screen:");
-    ImGui::TextColored(kPointsGained, "  +5");
+    ImGui::TextWrapped("%s", Tr(TextId::HistoryLegendDetailIntro));
+    ImGui::TextColored(kPointsGained, "  +5"); // sample numbers, not text
     ImGui::SameLine();
-    ImGui::TextWrapped("points earned");
+    ImGui::TextWrapped("%s", Tr(TextId::HistoryLegendPointsEarned));
     ImGui::TextColored(kPointsLost, "  -3");
     ImGui::SameLine();
-    ImGui::TextWrapped("points lost");
+    ImGui::TextWrapped("%s", Tr(TextId::HistoryLegendPointsLost));
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::TextWrapped("Click any day to see every behavior logged on it.");
+    ImGui::TextWrapped("%s", Tr(TextId::HistoryLegendClickDay));
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, kTodayBorder);
-    ImGui::TextWrapped("Note: Data is only stored for 30 days. At midnight each night, "
-                       "the oldest day is permanently removed.");
+    ImGui::TextWrapped("%s", Tr(TextId::HistoryLegendRetentionNote));
     ImGui::PopStyleColor();
 }
 
@@ -318,9 +313,10 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     // window is narrow, the points move below the title (so the button can
     // stay at the top right); if even that doesn't fit, the button wraps.
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("History - Last 30 Days");
-    char pointsText[64];
-    std::snprintf(pointsText, sizeof(pointsText), "Current Points: %d", log.currentPoints());
+    ImGui::TextUnformatted(Tr(TextId::HistoryTitle));
+    const std::string pointsString =
+        Format(Tr(TextId::CommonCurrentPoints), {log.currentPoints()});
+    const char *pointsText = pointsString.c_str();
     const float pointsInlineWidth = ImGui::CalcTextSize("   ").x + ImGui::CalcTextSize(pointsText).x;
     const bool pointsInline =
         ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x * 2.0f + pointsInlineWidth +
@@ -335,8 +331,8 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
     ImGui::PushStyleColor(ImGuiCol_Button, kExportButton);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kExportButtonHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kExportButtonActive);
-    if (ImGui::Button("Export PDF", kExportButtonSize))
-        ShowPdfExportResult(ExportHistoryPdf(log), "Your behavior history");
+    if (ImGui::Button(Tr(TextId::CommonExportPdfButton), kExportButtonSize))
+        ShowPdfExportResult(ExportHistoryPdf(log), TextId::ExportSavedHistory);
     ImGui::PopStyleColor(3);
 
     if (!pointsInline)
@@ -344,12 +340,12 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
 
     DrawExportPopup();
 
-    if (ImGui::Button("< Back", ImVec2(200, 55)))
+    if (ImGui::Button(Tr(TextId::CommonBackButton), ImVec2(200, 55)))
     {
         screen = Screen::Main;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Trends", ImVec2(200, 55)))
+    if (ImGui::Button(Tr(TextId::CommonTrendsButton), ImVec2(200, 55)))
         OpenTrendsScreen(screen);
 
     ImGui::Separator();
@@ -453,7 +449,7 @@ void DrawHistoryScreen(BehaviorLog &log, Screen &screen, std::string &selectedDa
 // Full-screen view of every behavior logged on one day.
 void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &selectedDate)
 {
-    if (ImGui::Button("< Back to Calendar", ImVec2(360, 55)))
+    if (ImGui::Button(Tr(TextId::DayDetailBackButton), ImVec2(360, 55)))
     {
         screen = Screen::History;
         g_returningFromDayDetail = true;
@@ -472,26 +468,28 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
     if (day == nullptr)
     {
         // Can happen if midnight passes while this screen is open
-        ImGui::TextWrapped("This day is no longer within the 30-day history, "
-                           "so its data has been removed.");
+        ImGui::TextWrapped("%s", Tr(TextId::DayDetailRemoved));
         return;
     }
 
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.3f);
-    ImGui::Text("%s%s", BehaviorLog::formatFriendlyDate(day->midnight).c_str(),
-                day->date == BehaviorLog::formatDate(now) ? "  (Today)" : "");
+    const std::string dayTitle = BehaviorLog::formatFriendlyDate(day->midnight);
+    if (day->date == BehaviorLog::formatDate(now))
+        ImGui::TextUnformatted(Format(Tr(TextId::DayDetailTitleToday), {dayTitle}).c_str());
+    else
+        ImGui::TextUnformatted(dayTitle.c_str());
     ImGui::PopFont();
 
     if (!day->hasData)
     {
         ImGui::Spacing();
-        ImGui::TextColored(kNoDataText, "No behaviors were logged on this day.");
+        ImGui::TextColored(kNoDataText, "%s", Tr(TextId::DayDetailNoBehaviors));
         return;
     }
 
-    ImGui::Text("Ending Points: %d", day->endingPoints);
-    ImGui::TextDisabled("%zu behavior%s logged", day->entries.size(),
-                        day->entries.size() == 1 ? "" : "s");
+    ImGui::TextUnformatted(Format(Tr(TextId::DayDetailEndingPoints), {day->endingPoints}).c_str());
+    ImGui::TextDisabled("%s", TrPlural(PluralId::DayDetailBehaviorsLogged,
+                                       static_cast<long long>(day->entries.size())).c_str());
     ImGui::Spacing();
 
     // Thin lines and a small gap between columns keep them (and their
@@ -508,10 +506,14 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
     // longest behavior still doesn't fit, the table scrolls sideways instead
     // of cutting the names off.
     const ImGuiStyle &tableStyle = ImGui::GetStyle();
-    float behaviorWidth = ImGui::CalcTextSize("Behavior").x;
-    float timeWidth = ImGui::CalcTextSize("Time").x;
-    float pointsWidth = ImGui::CalcTextSize("Points").x;
-    float totalWidth = ImGui::CalcTextSize("Total After").x;
+    const char *timeHeader = Tr(TextId::ColumnTime);
+    const char *behaviorHeader = Tr(TextId::ColumnBehavior);
+    const char *pointsHeader = Tr(TextId::ColumnPoints);
+    const char *totalHeader = Tr(TextId::ColumnTotalAfter);
+    float behaviorWidth = ImGui::CalcTextSize(behaviorHeader).x;
+    float timeWidth = ImGui::CalcTextSize(timeHeader).x;
+    float pointsWidth = ImGui::CalcTextSize(pointsHeader).x;
+    float totalWidth = ImGui::CalcTextSize(totalHeader).x;
     char number[32];
     for (const BehaviorEntry &entry : day->entries)
     {
@@ -544,10 +546,10 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
                           layout.innerWidth))
     {
         ImGui::TableSetupScrollFreeze(0, 1); // keep the header visible
-        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, timeWidth);
-        ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Points", ImGuiTableColumnFlags_WidthFixed, pointsWidth);
-        ImGui::TableSetupColumn("Total After", ImGuiTableColumnFlags_WidthFixed, totalWidth);
+        ImGui::TableSetupColumn(timeHeader, ImGuiTableColumnFlags_WidthFixed, timeWidth);
+        ImGui::TableSetupColumn(behaviorHeader, ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(pointsHeader, ImGuiTableColumnFlags_WidthFixed, pointsWidth);
+        ImGui::TableSetupColumn(totalHeader, ImGuiTableColumnFlags_WidthFixed, totalWidth);
         // Header row drawn as plain text (not TableHeadersRow(), whose cells
         // are interactive sort/menu buttons). Keeps the header background.
         // Times (and their header) are right-aligned so they line up on the

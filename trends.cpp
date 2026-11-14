@@ -1,5 +1,7 @@
 #include "trends.h"
 
+#include "localization/strings.h"
+
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -43,23 +45,21 @@ bool TrendFilter::NoWeekdays() const
 
 std::string DescribeWeekdays(const std::array<bool, 7> &weekdays)
 {
-    static const char *kShortNames[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-
     const std::array<bool, 7> all{true, true, true, true, true, true, true};
     const std::array<bool, 7> schoolDays{false, true, true, true, true, true, false};
     const std::array<bool, 7> weekend{true, false, false, false, false, false, true};
-    if (weekdays == all) return "All days";
-    if (weekdays == schoolDays) return "Weekdays (Mon-Fri)";
-    if (weekdays == weekend) return "Weekends (Sat-Sun)";
+    if (weekdays == all) return Tr(TextId::WeekdaysAll);
+    if (weekdays == schoolDays) return Tr(TextId::WeekdaysSchoolDays);
+    if (weekdays == weekend) return Tr(TextId::WeekdaysWeekend);
 
     std::string text;
     for (int d = 0; d < 7; ++d)
     {
         if (!weekdays[d]) continue;
-        if (!text.empty()) text += ", ";
-        text += kShortNames[d];
+        if (!text.empty()) text += Tr(TextId::ListSeparator);
+        text += WeekdayShortName(d);
     }
-    return text.empty() ? "None selected" : text;
+    return text.empty() ? std::string(Tr(TextId::WeekdaysNone)) : text;
 }
 
 FilteredBehaviors ApplyTrendFilter(const BehaviorLog &log, const TrendFilter &filter,
@@ -94,18 +94,18 @@ std::vector<std::pair<std::string, std::string>> TrendFilter::Describe(
         last = &day;
     }
 
-    std::string range = "None";
+    std::string range = Tr(TextId::DescribeDateRangeNone);
     if (first && last)
     {
         const int length = static_cast<int>(last - first) + 1;
-        range = BehaviorLog::formatLongDate(first->midnight) + " to " +
-                BehaviorLog::formatLongDate(last->midnight) + " (" +
-                std::to_string(length) + (length == 1 ? " day)" : " days)");
+        range = TrPlural(PluralId::DescribeDateRange, length,
+                         {BehaviorLog::formatLongDate(first->midnight),
+                          BehaviorLog::formatLongDate(last->midnight)});
     }
 
     return {
-        {"Date range:", range},
-        {"Days of week:", DescribeWeekdays(weekdays)},
+        {Tr(TextId::PdfDateRangeLabel), range},
+        {Tr(TextId::DescribeDaysOfWeekLabel), DescribeWeekdays(weekdays)},
     };
 }
 
@@ -236,25 +236,25 @@ static std::string TwelveHourLabel(int hour)
 {
     hour = ((hour % 24) + 24) % 24;
     const int shown = (hour % 12 == 0) ? 12 : hour % 12;
-    return std::to_string(shown) + (hour < 12 ? "am" : "pm");
+    return Format(Tr(hour < 12 ? TextId::HourAm : TextId::HourPm), {shown});
 }
 
 std::string HourBlockLabel(int hour)
 {
-    return TwelveHourLabel(hour) + "-" + TwelveHourLabel(hour + 1);
+    return Format(Tr(TextId::HourRange), {TwelveHourLabel(hour), TwelveHourLabel(hour + 1)});
 }
 
 std::string TimesLabel(int count)
 {
-    return std::to_string(count) + (count == 1 ? " time" : " times");
+    return TrPlural(PluralId::TimesLogged, count);
 }
 
 std::string EmptyHourLabel(ChoiceKind kind)
 {
     switch (kind)
     {
-    case ChoiceKind::Good: return "No good choices logged";
-    case ChoiceKind::Wrong: return "No wrong choices logged";
-    default: return "No behaviors logged";
+    case ChoiceKind::Good: return Tr(TextId::EmptyHourGood);
+    case ChoiceKind::Wrong: return Tr(TextId::EmptyHourWrong);
+    default: return Tr(TextId::EmptyHourAll);
     }
 }

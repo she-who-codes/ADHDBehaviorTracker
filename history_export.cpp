@@ -1,5 +1,6 @@
 #include "history_export.h"
 
+#include "localization/strings.h"
 #include "report_writer.h"
 #include "simple_pdf.h"
 
@@ -48,20 +49,21 @@ void dayHeading(ReportWriter &w, const HistoryDay &day, bool continued)
 
     std::string title = BehaviorLog::formatFriendlyDate(day.midnight);
     if (continued)
-        title += " (continued)";
+        title = Format(Tr(TextId::PdfHistoryDayContinued), {title});
     w.doc.text(kMargin + 8, w.y + 15, title, Font::Bold, 11.5f, kText);
 
     if (day.hasData)
         w.doc.textRight(kMargin + kContentW - 8, w.y + 15,
-                        "Ending points: " + std::to_string(day.endingPoints),
+                        Format(Tr(TextId::PdfHistoryEndingPoints), {day.endingPoints}),
                         Font::Bold, 11, kText);
     w.y += bandH;
 }
 
 void dayTableHeader(ReportWriter &w)
 {
-    w.tableHeader({{"Time", kColTime}, {"Behavior", kColBehavior}},
-                  {{"Points", kColPointsRight}, {"Total After", kColTotalRight}});
+    w.tableHeader({{Tr(TextId::ColumnTime), kColTime}, {Tr(TextId::ColumnBehavior), kColBehavior}},
+                  {{Tr(TextId::ColumnPoints), kColPointsRight},
+                   {Tr(TextId::ColumnTotalAfter), kColTotalRight}});
 }
 } // namespace
 
@@ -75,22 +77,25 @@ std::string BuildHistoryPdf(const BehaviorLog &log, std::time_t now)
 {
     const std::vector<HistoryDay> days = log.historyWindow(now); // oldest first
 
-    ReportWriter w("Behavior Tracker - Behavior History Report");
-    w.doc.setTitle("Behavior History Report");
+    const char *reportTitle = Tr(TextId::PdfHistoryTitle);
+    ReportWriter w(Format(Tr(TextId::PdfFooter), {reportTitle}));
+    w.doc.setTitle(reportTitle);
 
     // ---- Report header ------------------------------------------------------
-    w.doc.text(kMargin, w.y + 20, "Behavior History Report", Font::Bold, 22, kText);
+    w.doc.text(kMargin, w.y + 20, reportTitle, Font::Bold, 22, kText);
     w.y += 36;
 
-    const std::string range = BehaviorLog::formatLongDate(days.front().midnight) + " to " +
-                              BehaviorLog::formatLongDate(days.back().midnight);
-    const std::string created = BehaviorLog::formatFriendlyDate(now) + " at " +
-                                BehaviorLog::formatFriendlyTime(now);
+    const std::string range = Format(Tr(TextId::DateRangeFromTo),
+                                     {BehaviorLog::formatLongDate(days.front().midnight),
+                                      BehaviorLog::formatLongDate(days.back().midnight)});
+    const std::string created = Format(Tr(TextId::DateAtTime),
+                                       {BehaviorLog::formatFriendlyDate(now),
+                                        BehaviorLog::formatFriendlyTime(now)});
 
     const std::pair<const char *, std::string> headerLines[] = {
-        {"Date range:", range},
-        {"Created:", created},
-        {"Current points:", std::to_string(log.currentPoints())},
+        {Tr(TextId::PdfDateRangeLabel), range},
+        {Tr(TextId::PdfCreatedLabel), created},
+        {Tr(TextId::PdfHistoryCurrentPoints), std::to_string(log.currentPoints())},
     };
     for (const auto &line : headerLines)
     {
@@ -112,24 +117,28 @@ std::string BuildHistoryPdf(const BehaviorLog &log, std::time_t now)
                      [](const auto &a, const auto &b)
                      { return a.second > b.second; }); // ties stay alphabetical
 
-    w.sectionTitle("Behavior Summary",
-                   "Each behavior logged in this period and how many times it was logged (most to least).");
+    w.sectionTitle(Tr(TextId::PdfHistorySummaryTitle), Tr(TextId::PdfHistorySummaryCaption));
 
     if (summary.empty())
     {
-        w.doc.text(kMargin + 8, w.y + 12, "No behaviors were logged in this period.",
+        w.doc.text(kMargin + 8, w.y + 12, Tr(TextId::PdfHistoryNoBehaviors),
                    Font::Regular, kBodySize, kMuted);
         w.y += kRowH;
     }
     else
     {
         const float timesRight = kMargin + kContentW - 8;
-        w.tableHeader({{"Behavior", kMargin + 8}}, {{"Times Logged", timesRight}});
+        const auto header = [&]
+        {
+            w.tableHeader({{Tr(TextId::ColumnBehavior), kMargin + 8}},
+                          {{Tr(TextId::ColumnTimesLogged), timesRight}});
+        };
+        header();
         int row = 0;
         for (const auto &item : summary)
         {
             if (w.ensureSpace(kRowH))
-                w.tableHeader({{"Behavior", kMargin + 8}}, {{"Times Logged", timesRight}});
+                header();
             w.zebra(row++);
             w.doc.text(kMargin + 8, w.y + 12.5f, item.first, Font::Regular, kBodySize, kText);
             w.doc.textRight(timesRight, w.y + 12.5f, std::to_string(item.second),
@@ -141,8 +150,7 @@ std::string BuildHistoryPdf(const BehaviorLog &log, std::time_t now)
     w.rule();
 
     // ---- Daily log, newest first --------------------------------------------
-    w.sectionTitle("Daily Log",
-                   "Newest day first. Points in green were earned; points in red were lost.");
+    w.sectionTitle(Tr(TextId::PdfHistoryDailyLogTitle), Tr(TextId::PdfHistoryDailyLogCaption));
 
     for (auto it = days.rbegin(); it != days.rend(); ++it)
     {
@@ -152,7 +160,8 @@ std::string BuildHistoryPdf(const BehaviorLog &log, std::time_t now)
         {
             w.ensureSpace(22 + kRowH + 10);
             dayHeading(w, day, false);
-            w.doc.text(kMargin + 8, w.y + 13, "No data logged", Font::Regular, kBodySize, kMuted);
+            w.doc.text(kMargin + 8, w.y + 13, Tr(TextId::CommonNoDataLogged), Font::Regular,
+                       kBodySize, kMuted);
             w.y += kRowH + 10;
             continue;
         }
@@ -242,7 +251,7 @@ ExportResult SavePdfToDownloads(const std::string &fileName, const std::string &
     std::filesystem::create_directories(dir, ec); // no-op if it exists
     if (!std::filesystem::is_directory(dir, ec))
     {
-        result.error = "The Downloads folder could not be found or created:\n" + dir.u8string();
+        result.error = Format(Tr(TextId::ExportErrorNoDownloadsFolder), {dir.u8string()});
         return result;
     }
 
@@ -251,14 +260,14 @@ ExportResult SavePdfToDownloads(const std::string &fileName, const std::string &
     std::ofstream out(result.path, std::ios::binary | std::ios::trunc);
     if (!out.is_open())
     {
-        result.error = "Could not create the file:\n" + result.path.u8string();
+        result.error = Format(Tr(TextId::ExportErrorCreateFile), {result.path.u8string()});
         return result;
     }
     out.write(pdfBytes.data(), static_cast<std::streamsize>(pdfBytes.size()));
     out.close();
     if (!out)
     {
-        result.error = "Could not finish writing the file:\n" + result.path.u8string();
+        result.error = Format(Tr(TextId::ExportErrorWriteFile), {result.path.u8string()});
         return result;
     }
 

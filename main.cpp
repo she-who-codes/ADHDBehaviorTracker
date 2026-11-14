@@ -17,6 +17,7 @@
 #include "behavior_choice.h"
 #include "behavior_log.h"
 #include "history_view.h"
+#include "localization/strings.h"
 #include "trends_view.h"
 #include "ui_layout.h"
 
@@ -32,8 +33,6 @@ static const ImVec2 kChoicePanePadding(18, 18);
 // labels are short). A longer label wraps onto a second line in its button
 // instead of forcing the panes to stack.
 static const float kChoicePaneSideBySideWidth = 420.0f;
-static const char *kCreateGoodLabel = "+  CREATE A GOOD CHOICE";
-static const char *kCreateWrongLabel = "+  CREATE A WRONG CHOICE";
 // Smallest window the layout is designed for (well under half of a 1366x768
 // screen). Below this, panes would be too small to use.
 static const int kMinWindowWidth = 640;
@@ -62,11 +61,11 @@ static std::string makeChoiceLabel(const BehaviorChoice &choice)
 static std::vector<BehaviorChoice> getDefaultChoices()
 {
     return {
-        {"Completed Morning Routine", 5, true},
-        {"Followed Directions", 2, true},
-        {"Completed Schoolwork", 5, true},
-        {"Negative Behavior", -3, false},
-        {"Incomplete Schoolwork", -5, false}
+        {Tr(TextId::DefaultChoiceMorningRoutine), 5, true},
+        {Tr(TextId::DefaultChoiceFollowedDirections), 2, true},
+        {Tr(TextId::DefaultChoiceSchoolwork), 5, true},
+        {Tr(TextId::DefaultChoiceNegativeBehavior), -3, false},
+        {Tr(TextId::DefaultChoiceIncompleteSchoolwork), -5, false}
     };
 }
 
@@ -259,8 +258,13 @@ static void drawAddChoiceButton(bool isGood,
                                std::vector<BehaviorChoice> &choices)
 {
     // Uses the app's standard blue button colours, like History and Trends.
-    const char *buttonLabel = isGood ? kCreateGoodLabel : kCreateWrongLabel;
-    const char *popupTitle = isGood ? "New Good Choice" : "New Wrong Choice";
+    const char *buttonLabel = Tr(isGood ? TextId::AddChoiceGoodButton
+                                        : TextId::AddChoiceWrongButton);
+    // ImGui identifies a popup by its title. The fixed "###..." part keeps
+    // the ID the same in every language; only the text before it is shown.
+    const std::string popupTitle =
+        std::string(Tr(isGood ? TextId::AddChoiceGoodTitle : TextId::AddChoiceWrongTitle)) +
+        (isGood ? "###NewGoodChoicePopup" : "###NewWrongChoicePopup");
 
     static char nameInput[2][128] = {};
     static int pointsInput[2] = {defaultPoints(true), defaultPoints(false)};
@@ -272,12 +276,12 @@ static void drawAddChoiceButton(bool isGood,
     {
         name[0] = '\0';
         points = defaultPoints(isGood);
-        ImGui::OpenPopup(popupTitle);
+        ImGui::OpenPopup(popupTitle.c_str());
     }
 
     ui::CenterNextPopup();
 
-    if (ImGui::BeginPopupModal(popupTitle, nullptr,
+    if (ImGui::BeginPopupModal(popupTitle.c_str(), nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
         // 560 wide normally; narrower when the app window is too small for
@@ -288,19 +292,19 @@ static void drawAddChoiceButton(bool isGood,
             style.WindowPadding.x * 2.0f;
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + contentWidth);
 
-        ImGui::Text("Choice name:");
+        ImGui::TextUnformatted(Tr(TextId::AddChoiceNameLabel));
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(contentWidth);
         ImGui::InputTextWithHint("##name",
-    isGood ? "e.g. Cleaned Room" : "e.g. Lying",
+    Tr(isGood ? TextId::AddChoiceGoodNameHint : TextId::AddChoiceWrongNameHint),
     name, sizeof(nameInput[0]));
 
-        ImGui::Text(isGood ? "Points to add:" : "Points to subtract:");
+        ImGui::TextUnformatted(Tr(isGood ? TextId::AddChoicePointsToAdd
+                                         : TextId::AddChoicePointsToSubtract));
         drawPointsStepper(points, isGood);
         ImGui::PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]);
-        ImGui::TextWrapped("%s",
-            isGood ? "+ rewards more, - rewards less (+1 to +10)"
-                   : "+ penalises more, - penalises less (-1 to -10)");
+        ImGui::TextWrapped("%s", Tr(isGood ? TextId::AddChoiceGoodPointsHelp
+                                           : TextId::AddChoiceWrongPointsHelp));
         ImGui::PopStyleColor();
 
         std::string trimmedName = name;
@@ -315,7 +319,7 @@ static void drawAddChoiceButton(bool isGood,
         ImGui::Spacing();
         ImGui::BeginDisabled(!canAdd);
         const float actionWidth = (contentWidth - style.ItemSpacing.x) * 0.5f;
-        const bool addClicked = ImGui::Button("Add", ImVec2(actionWidth, 0));
+        const bool addClicked = ImGui::Button(Tr(TextId::AddChoiceAddButton), ImVec2(actionWidth, 0));
         ImGui::EndDisabled();
 
         if (canAdd && addClicked)
@@ -326,7 +330,7 @@ static void drawAddChoiceButton(bool isGood,
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(actionWidth, 0)) ||
+        if (ImGui::Button(Tr(TextId::AddChoiceCancelButton), ImVec2(actionWidth, 0)) ||
             (!ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)))
             ImGui::CloseCurrentPopup();
 
@@ -339,7 +343,8 @@ static void drawAddChoiceButton(bool isGood,
 static float choicePaneMinWidth(const std::vector<BehaviorChoice> &choices,
                                 bool isGood)
 {
-    float widest = ui::ButtonWidthFor(isGood ? kCreateGoodLabel : kCreateWrongLabel);
+    float widest = ui::ButtonWidthFor(Tr(isGood ? TextId::AddChoiceGoodButton
+                                                : TextId::AddChoiceWrongButton));
     for (const BehaviorChoice &choice : choices)
         if (choice.isGood == isGood)
             widest = std::max(widest, ui::ButtonWidthFor(makeChoiceLabel(choice).c_str()));
@@ -437,18 +442,19 @@ static void drawMainScreen(BehaviorLog &log,
     const ImGuiStyle &style = ImGui::GetStyle();
     const ImVec2 navButtonSize(200, 55);
 
-    ImGui::TextWrapped("Welcome to the Behavior Tracker!");
-    ImGui::Text("Current Points: %d", log.currentPoints());
+    ImGui::TextWrapped("%s", Tr(TextId::MainWelcome));
+    ImGui::TextUnformatted(
+        Format(Tr(TextId::CommonCurrentPoints), {log.currentPoints()}).c_str());
 
     // History and Trends sit on the same row as the points display, or
     // together on the next row when the window is too narrow for that.
     ui::SameLineIfFits(navButtonSize.x * 2.0f + style.ItemSpacing.x, 60.0f);
-    if (ImGui::Button("History", navButtonSize))
+    if (ImGui::Button(Tr(TextId::MainHistoryButton), navButtonSize))
     {
         screen = Screen::History;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Trends", navButtonSize))
+    if (ImGui::Button(Tr(TextId::CommonTrendsButton), navButtonSize))
     {
         OpenTrendsScreen(screen);
     }
@@ -474,11 +480,11 @@ static void drawMainScreen(BehaviorLog &log,
                               paneMinHeight));
     const bool reserveScrollbar = choiceListsNeedScrollbar(choices, paneSize);
 
-    drawChoicePane("GoodChoices", "Good Choices", true, paneSize, reserveScrollbar,
+    drawChoicePane("GoodChoices", Tr(TextId::CommonGoodChoices), true, paneSize, reserveScrollbar,
                    log, choices);
     if (sideBySide)
         ImGui::SameLine();
-    drawChoicePane("WrongChoices", "Wrong Choices", false, paneSize, reserveScrollbar,
+    drawChoicePane("WrongChoices", Tr(TextId::CommonWrongChoices), false, paneSize, reserveScrollbar,
                    log, choices);
 }
 

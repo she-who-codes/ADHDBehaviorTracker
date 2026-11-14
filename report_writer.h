@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include "localization/strings.h"
 #include "simple_pdf.h"
 
 // Page layout, colours and a top-to-bottom writer shared by the PDF reports
@@ -106,7 +107,7 @@ public:
             doc.line(kMargin, fy - 12, kMargin + kContentW, fy - 12, 0.5f, kRule);
             doc.text(kMargin, fy, footerTitle, Font::Regular, 8.5f, kMuted);
             doc.textRight(kMargin + kContentW, fy,
-                          "Page " + std::to_string(i + 1) + " of " + std::to_string(pages),
+                          Format(Tr(TextId::PdfPageNumber), {i + 1, pages}),
                           Font::Regular, 8.5f, kMuted);
         }
     }

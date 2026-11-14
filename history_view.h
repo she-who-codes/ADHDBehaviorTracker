@@ -4,6 +4,7 @@
 
 #include "behavior_log.h"
 #include "history_export.h"
+#include "localization/strings.h"
 
 // Which screen is showing.
 enum class Screen
@@ -17,7 +18,7 @@ enum class Screen
 // Calendar helpers shared by the History calendar and the Trends date pickers.
 int DaysInMonth(int year, int month);          // month is 1-12
 int FirstWeekdayOfMonth(int year, int month);  // 0 = Sunday ... 6 = Saturday
-std::string MonthTitle(int year, int month);   // "October 2026"
+std::string MonthTitle(int year, int month);   // "October 2026" (in the current language)
 
 // Week rows (0-based, Sunday-first) of a month's calendar grid that contain
 // at least one day in [firstDay, lastDay]. Weeks outside this range have no
@@ -41,7 +42,8 @@ void DrawDayDetailScreen(BehaviorLog &log, Screen &screen, const std::string &se
 // PDF export confirmation popup, shared by every screen with an "Export PDF"
 // button. Call ShowPdfExportResult() when the button is clicked (it opens the
 // PDF in the default viewer if the export worked), and DrawExportPopup() every
-// frame from the same window. 'description' completes the sentence
-// "... was saved to your Downloads folder", e.g. "Your behavior history".
-void ShowPdfExportResult(const ExportResult &result, const char *description);
+// frame from the same window. 'savedMessage' is the full sentence shown when
+// it worked, e.g. TextId::ExportSavedHistory ("Your behavior history was
+// saved to your Downloads folder:"), followed by the file's path.
+void ShowPdfExportResult(const ExportResult &result, TextId savedMessage);
 void DrawExportPopup();
